@@ -1,0 +1,73 @@
+name: core CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "core/**"
+      - ".github/workflows/ci.yml"
+
+defaults:
+  run:
+    working-directory: core
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: otherworld
+          POSTGRES_PASSWORD: otherworld
+          POSTGRES_DB: otherworld
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U otherworld"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://otherworld:otherworld@localhost:5432/otherworld
+      DATABASE_URL_SYNC: postgresql+psycopg://otherworld:otherworld@localhost:5432/otherworld
+      REDIS_URL: redis://localhost:6379/0
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Enable pgvector extension
+        run: |
+          sudo apt-get install -y postgresql-client
+          PGPASSWORD=otherworld psql -h localhost -U otherworld -d otherworld -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+      - name: ruff
+        run: ruff check .
+
+      - name: mypy (strict on models/ and safety/)
+        run: mypy --strict src/otherworld/models src/otherworld/safety
+
+      - name: Run migrations
+        run: alembic upgrade head
+
+      - name: pytest
+        run: pytest
