@@ -113,6 +113,10 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+asyncpg://otherworld:otherworld@localhost:5432/otherworld"
     database_url_sync: str = "postgresql+psycopg://otherworld:otherworld@localhost:5432/otherworld"
+    # A separate database, never touched by alembic or the running app.
+    # tests/conftest.py creates and drops the full schema on it per test —
+    # pointing that at `database_url` would periodically wipe the dev DB.
+    test_database_url: str = "postgresql+asyncpg://otherworld:otherworld@localhost:5432/otherworld_test"
     redis_url: str = "redis://localhost:6379/0"
 
     world: WorldConfig = WorldConfig()

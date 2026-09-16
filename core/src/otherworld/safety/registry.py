@@ -17,6 +17,10 @@ from dataclasses import dataclass
 
 from otherworld.models.events import ActionCategory
 
+# Bumped whenever _ACTIONS changes shape. AgentBundle.action_space_ref
+# points here rather than copying the registry (About/architecture.md §3).
+REGISTRY_VERSION = "v1"
+
 
 class UnknownActionError(Exception):
     """Raised when code asks the registry to resolve an action it does not contain."""

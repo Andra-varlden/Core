@@ -10,14 +10,18 @@ from otherworld.models import agent, events, memory, output, owner, persona, rel
 
 @pytest_asyncio.fixture
 async def db_session() -> AsyncSession:
-    """A fresh engine per test, bound to that test's event loop.
+    """A fresh engine per test, bound to that test's event loop, against the
+    dedicated test database (never `otherworld.config.settings.database_url`
+    — this fixture creates and drops the full schema every test, which would
+    periodically wipe the dev database and anything the CLI put there).
 
-    `otherworld.db.engine` is a module-level singleton meant for the app's
-    single long-lived loop. pytest-asyncio gives each test its own loop, so
-    reusing that singleton here causes asyncpg connections to leak across
-    loops. Tests get their own throwaway engine instead.
+    `otherworld.db.engine` is also unsuitable for a second reason: it is a
+    module-level singleton meant for the app's single long-lived loop.
+    pytest-asyncio gives each test its own loop, so reusing that singleton
+    here would leak asyncpg connections across loops. Tests get their own
+    throwaway engine instead.
     """
-    engine = create_async_engine(settings.database_url, echo=False)
+    engine = create_async_engine(settings.test_database_url, echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 

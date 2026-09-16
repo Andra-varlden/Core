@@ -11,11 +11,7 @@ from __future__ import annotations
 import hashlib
 
 from otherworld.llm.protocol import Completion, Prompt
-
-
-def _seeded_float(seed_text: str, salt: str) -> float:
-    digest = hashlib.sha256(f"{salt}:{seed_text}".encode()).hexdigest()
-    return int(digest[:8], 16) / 0xFFFFFFFF
+from otherworld.models.memory import EMBEDDING_DIM
 
 
 class MockLLMProvider:
@@ -28,8 +24,15 @@ class MockLLMProvider:
         return self._respond(prompt, model="mock-tier2")
 
     async def embed(self, text: str) -> list[float]:
-        digest = hashlib.sha256(text.encode()).digest()
-        return [b / 255.0 for b in digest] * 12  # 32 * 12 = 384-d deterministic vector
+        # Must match memory_records.embedding's fixed pgvector dimension
+        # (EMBEDDING_DIM) exactly, or inserts fail with a dimension mismatch.
+        values: list[float] = []
+        block = text.encode()
+        while len(values) < EMBEDDING_DIM:
+            digest = hashlib.sha256(block).digest()
+            values.extend(b / 255.0 for b in digest)
+            block = digest
+        return values[:EMBEDDING_DIM]
 
     def _respond(self, prompt: Prompt, model: str) -> Completion:
         joined = prompt.system + "".join(m.get("content", "") for m in prompt.messages)

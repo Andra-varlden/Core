@@ -19,10 +19,10 @@ to owners and spectators as an ongoing story.
 | | |
 |---|---|
 | **Phase** | Phase 1 — Fidelity proof |
-| **Milestone** | M1 — Persona capture |
-| **Status** | NOT STARTED (M0 complete) |
+| **Milestone** | M3 — Two agents, first contact (next up) |
+| **Status** | M0–M2 COMPLETE. M1 IN PROGRESS — capture pipeline built and tested (T1.1–T1.7 green); still need 3-4 more real persona objects captured via the CLI |
 | **Gate ahead** | Gate 1 — Recognition accuracy ≥ 70% (at M4) |
-| **Last updated** | 2026-09-15 |
+| **Last updated** | 2026-09-16 |
 
 > **This block is updated on every merged PR.** See [Update protocol](#-update-protocol).
 
@@ -100,6 +100,10 @@ pytest tests/simulation                 # seeded deterministic runs
 pytest tests/simulation -k determinism   # the one that must never fail
 python -m otherworld.eval.recognition   # Recognition Metric harness
 python -m otherworld.cli.run_world --seed 42 --ticks 1000
+
+# M1 — capture a real persona (method A or B)
+python -m otherworld.cli.capture --method A --handle <you> --email <you@example.com>
+python -m otherworld.cli.capture --method B --handle <you> --email <you@example.com>
 ```
 
 ---
@@ -152,8 +156,8 @@ These are the things that must never quietly erode.
 | ID | Milestone | Status |
 |---|---|---|
 | M0 | Foundations and schemas | COMPLETE |
-| M1 | Persona capture | NOT STARTED |
-| M2 | Single agent, single tick | NOT STARTED |
+| M1 | Persona capture | IN PROGRESS |
+| M2 | Single agent, single tick | COMPLETE |
 | M3 | Two agents, first contact | NOT STARTED |
 | M4 | **Recognition Metric — Gate 1** | NOT STARTED |
 | M5 | Small world, full social system | NOT STARTED |
@@ -204,6 +208,8 @@ Newest first. Format: `YYYY-MM-DD · #PR · milestone · change`
 
 | Date | PR | Milestone | Change |
 |---|---|---|---|
+| 2026-09-16 | — | M2 | Tick loop built end to end: Compiler + Binder, the six-phase loop (perceive→retrieve→decide→validate→act→resolve), the Validator's four ordered filters (owner boundary, platform policy, real-person guard, world legality/containment), tick-based clock with no wall-clock dependency, seeded-RNG determinism (including id generation), decision tracing, and the tick scheduler with re-prompt-once-then-idle fallback. T2.1–T2.10 all green (56/56 tests), including the two non-negotiables: T2.2 determinism and T2.7 containment. Fixed a real bug the first run surfaced: the mock embedding provider produced 384-dim vectors against a 1536-dim pgvector column. |
+| 2026-09-15 | — | M1 | Persona capture built: Method A (30-item questionnaire), Method B (conversational interview, deterministic keyword extraction), Method C (writing-sample ingestion with name redaction), boundary compilation, versioned persistence (invariant I5), and an interactive CLI (`otherworld.cli.capture`) for real capture sessions. T1.1–T1.7 all green: 33/33 tests pass, ruff clean, mypy --strict clean. Test suite now runs against a dedicated `otherworld_test` database, separate from dev, after a fixture bug briefly wiped the dev schema. Two real bugs surfaced and fixed by an actual capture session: cross-method versioning created duplicate v1 rows instead of refining into v2, and a "no evidence" confidence value was diluting existing trait readings on merge. |
 | 2026-09-15 | — | M0 | Docs moved into `About/`. `core` scaffolded: Pydantic + SQLAlchemy models for every shape in `architecture.md` §9, the action registry (28 actions, matches §10 exactly), the `LLMProvider` protocol + deterministic mock provider, config reading every `spec.md` §20 key, Alembic migration, Docker Compose (Postgres 16 + pgvector, Redis), CI workflow. T0.1–T0.8 all green: 19/19 tests pass, ruff clean, mypy --strict clean on `models/` and `safety/`. |
 | 2026-09-14 | — | M0 | Initial documentation set created: `context.md`, `architecture.md`, `spec.md`, `plan.md`, `README.md`. Decisions ADR-001 through ADR-009 recorded. |
 

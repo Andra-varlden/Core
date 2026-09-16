@@ -8,7 +8,7 @@
 > capacity changes and note the change here.
 >
 > **Status:** Living document. Update milestone status on every merge.
-> **Last updated:** 2026-09-15
+> **Last updated:** 2026-09-16
 
 ---
 
@@ -52,8 +52,8 @@ then move on.
 | ID | Milestone | Status | Started | Completed |
 |---|---|---|---|---|
 | M0 | Foundations and schemas | COMPLETE | 2026-09-15 | 2026-09-15 |
-| M1 | Persona capture | NOT STARTED | | |
-| M2 | Single agent, single tick | NOT STARTED | | |
+| M1 | Persona capture | IN PROGRESS | 2026-09-15 | |
+| M2 | Single agent, single tick | COMPLETE | 2026-09-16 | 2026-09-16 |
 | M3 | Two agents, first contact | NOT STARTED | | |
 | M4 | **Recognition Metric — Gate 1** | NOT STARTED | | |
 | M5 | Small world, full social system | NOT STARTED | | |
