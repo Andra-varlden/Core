@@ -119,6 +119,9 @@ class Settings(BaseSettings):
     test_database_url: str = "postgresql+asyncpg://otherworld:otherworld@localhost:5432/otherworld_test"
     redis_url: str = "redis://localhost:6379/0"
 
+    # LLM provider. See otherworld.llm.factory and About/spec.md §15.3.
+    groq_api_key: str | None = None
+
     world: WorldConfig = WorldConfig()
     memory: MemoryConfig = MemoryConfig()
     reflection: ReflectionConfig = ReflectionConfig()

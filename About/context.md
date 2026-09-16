@@ -8,7 +8,7 @@
 > **Status:** Living document. Updated whenever a decision changes, an assumption
 > is validated or invalidated, or new prior art appears.
 >
-> **Last updated:** 2026-09-14
+> **Last updated:** 2026-09-16
 > **Document owner:** Project founder (solo)
 
 ---
@@ -524,6 +524,39 @@ never be spoken about as fact.**
 | A8 | Personality does not collapse toward base-model default over multi-week runs. | UNTESTED | Recognition Metric re-run at week 1 / 4 / 12 | M5, Phase 2 |
 | A9 | Owners tolerate agent behaviour they disagree with, given a boundary system. | UNTESTED | Embarrassment-event rate and resulting churn | Phase 2 |
 | A10 | Newcomers can integrate into an established social graph without churning. | UNTESTED | Day-7 retention split by join cohort | Phase 2 |
+
+**A1 blocking dependency found at M4 (2026-09-16), then resolved and
+refined the same day:** the Recognition Metric harness is built and tested
+(`plan.md` T4.1, T4.2), but a real trial couldn't run at first for a reason
+sharper than "not enough captured personas." With no LLM provider key
+configured, every Tier 1/2 decision went through `MockLLMProvider` — a
+fixed heuristic that greets a stranger exactly once per pair and otherwise
+always chooses `idle`. A pilot run (2 personas, 500 ticks) confirmed this
+empirically: only 1 event ever exceeded the §14 importance floor (0.3) for
+one agent, 0 for the other, regardless of tick count.
+
+**A real provider (Groq) is now configured** (`spec.md` §15.3) and
+confirmed working end to end — live pilot runs show real persona-driven
+behavioural variance (two different personas produced visibly different
+action mixes) and correctly-scored high-importance events once two more
+real bugs surfaced by that same live testing were fixed: (1) the model
+would hallucinate plausible-but-nonexistent actions (e.g. `register_agent`)
+when only told to use "a registered action name" without being told what
+those are — correctly rejected by the Validator's containment either way,
+but now the prompt lists the closed action set explicitly so it doesn't
+have to guess; (2) relationship state changes (Stranger→Acquaintance,
+Acquaintance→Friend) weren't bumping an event's importance the way
+spec.md §5.1's own table says they should (0.75) — fixed in `runtime/resolver.py`.
+
+**Refined finding, same pilot data:** even with all of that working, 2
+agents (1 relationship pair) can only ever produce ~2-3 "relationship state
+change" events total, once per pair — nowhere near the 10-per-agent §14
+needs. This is exactly why `plan.md`'s M4 scope always specified **4-5
+persona agents**, not 2: more agents means more pairwise relationships,
+each contributing its own first-encounter and promotion moments. Recruiting
+the other 3-4 real M1 subjects is now the load-bearing next step — the
+provider was the harder blocker and it's resolved; headcount is the
+remaining one.
 
 ---
 

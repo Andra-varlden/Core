@@ -803,29 +803,39 @@ cost_per_agent_day =
 **T3.9 status, M3 (2026-09-16):** decision tracing now records real
 `input_tokens`/`output_tokens` on every Tier 1/2 decision
 (`architecture.md` §17's `DecisionTrace`), and a two-agent M3 simulation run
-measured them: Tier 1 averaged ~60 input / 16 output tokens over 119
-decisions, Tier 2 averaged ~82 input / 16 output over 1 decision. **These
-are not the real per-vendor-tokenizer numbers the `[TUNE]` estimates above
-call for** — two reasons: (1) no LLM provider key is configured yet
-(`README.md` open items), so both the token counts and the completions
-themselves come from `MockLLMProvider`'s `len(text)//4` heuristic and a
-fixed mock completion, not a real tokenizer or model; (2) the M2/M3 prompt
-is still minimal — `runtime/decision.py` fetches retrieved memories for the
-trace but does not yet inject their content into the prompt text, so
-current prompt sizes are well below what a persona-grounded, memory-aware
-Tier 1/2 prompt will actually cost. Re-measure once both are true: a real
-provider key exists and the prompt includes persona identity + retrieved
-memory content in full.
+measured them using `MockLLMProvider`: Tier 1 averaged ~60 input / 16
+output tokens over 119 decisions, Tier 2 averaged ~82 input / 16 output
+over 1 decision — not real per-vendor-tokenizer numbers, since the mock's
+completions and counts are a `len(text)//4` heuristic, not a real
+tokenizer or model.
 
-### 15.3 Rate table — **POPULATE BEFORE USE**
+**Update, M4 (2026-09-16):** a real provider (Groq) is now configured —
+see §15.3 — and a live smoke test through it returned real usage:
+~108 input tokens both tiers, 149 output (Tier 1) / 94 output (Tier 2) for
+one identical test prompt. That confirms the pipe works end to end, but
+it's still not the number to design the cost model around: the M2/M3
+prompt is minimal — `runtime/decision.py` fetches retrieved memories for
+the trace but does not inject their content into the prompt text — so
+current sizes are well below what a persona-grounded, memory-aware Tier 1/2
+prompt will actually cost once M5's reflection and retrieval are wired into
+the prompt itself. Re-measure `tokens_tier1`/`tokens_tier2` once that's true.
+
+### 15.3 Rate table
+
+Provider: Groq (`otherworld.llm.providers.groq`), chosen 2026-09-16. Tier 1
+= `openai/gpt-oss-20b`, Tier 2 = `openai/gpt-oss-120b`.
 
 | Item | Rate (per 1M tokens) | Source | Date checked |
 |---|---|---|---|
-| Tier 1 model input | *(fill)* | *(provider pricing page)* | *(date)* |
-| Tier 1 model output | *(fill)* | | |
-| Tier 2 model input | *(fill)* | | |
-| Tier 2 model output | *(fill)* | | |
-| Embeddings | *(fill)* | | |
+| Tier 1 model input (`openai/gpt-oss-20b`) | $0.075 | console.groq.com/docs/models, cross-checked against third-party pricing trackers | 2026-09-16 |
+| Tier 1 model output | $0.30 | same | 2026-09-16 |
+| Tier 2 model input (`openai/gpt-oss-120b`) | $0.15 | same | 2026-09-16 |
+| Tier 2 model output | $0.60 | same | 2026-09-16 |
+| Embeddings | *(fill)* — no embeddings provider configured yet; Groq has none. See `context.md` §11/§12. | | |
+
+**Re-check monthly per this section's own instruction.** Groq's docs noted
+mid-2026 pricing changes on other models (e.g. some Llama variants moving to
+enterprise-only pricing) — don't assume these numbers are permanent.
 
 ### 15.4 Budget targets
 

@@ -27,9 +27,11 @@ from otherworld.social.engine import apply_trust_delta, get_or_create_edge, save
 from otherworld.social.state_machine import is_social_interaction, promote_if_eligible
 
 # Base importance per event class, About/spec.md §5.1. Actions not listed
-# here default to the routine baseline; a first encounter with a previously
-# unmet agent overrides this to _FIRST_ENCOUNTER_IMPORTANCE regardless of
-# which action it was.
+# here default to the routine baseline. First encounters and relationship
+# state changes override this to their own (higher) class importance
+# regardless of which action triggered them — and a single action can be
+# both at once (a first-ever greet that immediately promotes Stranger ->
+# Acquaintance), in which case the higher of the two applies.
 _BASE_IMPORTANCE: dict[str, float] = {
     "idle": 0.05,
     "sleep": 0.05,
@@ -42,6 +44,7 @@ _BASE_IMPORTANCE: dict[str, float] = {
 }
 _DEFAULT_IMPORTANCE = 0.05
 _FIRST_ENCOUNTER_IMPORTANCE = 0.60
+_RELATIONSHIP_STATE_CHANGE_IMPORTANCE = 0.75
 _WITNESS_BONUS_THRESHOLD = 3
 _WITNESS_BONUS = 0.10
 
@@ -93,15 +96,45 @@ class Resolver:
         created_at = tick_to_datetime(tick)
         social = is_social_interaction(action) and bool(targets)
 
-        edges: dict[uuid.UUID, tuple[RelationshipEdge, bool]] = {}
-        if social:
-            for target_id in targets:
-                edge, created = await get_or_create_edge(
-                    session, world_id, actor_id, target_id, seeded_uuid(rng), tick
-                )
-                edges[target_id] = (edge, created)
+        # Resolve trust and bond-state consequences first, using only
+        # shared memories that already existed before this tick — this
+        # tick's own (not-yet-written) memories are appended to the edge
+        # afterward, once we know their final importance. That ordering is
+        # what lets us tell, below, whether THIS action just caused a
+        # promotion, so its own importance can reflect that.
+        edges: dict[uuid.UUID, RelationshipEdge] = {}
+        relationship_deltas: list[dict[str, object]] = []
+        state_changed = False
+        for target_id in targets if social else []:
+            edge, _created = await get_or_create_edge(
+                session, world_id, actor_id, target_id, seeded_uuid(rng), tick
+            )
+            before_state, before_trust = edge.bond_state, edge.trust
 
-        importance = _FIRST_ENCOUNTER_IMPORTANCE if first_encounter else importance_for_action(action)
+            edge = apply_trust_delta(edge, action)
+            edge = edge.model_copy(
+                update={"contact_count": edge.contact_count + 1, "last_contact_tick": tick}
+            )
+            max_shared = await _max_shared_importance(session, edge.shared_memory_ids)
+            edge = promote_if_eligible(edge, max_shared)
+
+            edges[target_id] = edge
+            state_changed = state_changed or edge.bond_state != before_state
+            relationship_deltas.append(
+                {
+                    "target_id": str(target_id),
+                    "trust_before": before_trust,
+                    "trust_after": edge.trust,
+                    "bond_state_before": before_state.value,
+                    "bond_state_after": edge.bond_state.value,
+                }
+            )
+
+        importance = importance_for_action(action)
+        if first_encounter:
+            importance = max(importance, _FIRST_ENCOUNTER_IMPORTANCE)
+        if state_changed:
+            importance = max(importance, _RELATIONSHIP_STATE_CHANGE_IMPORTANCE)
         if len(witnesses) >= _WITNESS_BONUS_THRESHOLD:
             importance = min(1.0, importance + _WITNESS_BONUS)
 
@@ -150,34 +183,15 @@ class Resolver:
                     )
                 )
 
-        relationship_deltas: list[dict[str, object]] = []
-        for target_id in targets:
-            if target_id not in edges:
-                continue
-            edge, _created = edges[target_id]
-            before_state, before_trust = edge.bond_state, edge.trust
-
-            edge = apply_trust_delta(edge, action)
+        # Now that this tick's memories exist and carry their final
+        # importance, fold their ids into the edge's shared history so a
+        # *future* tick's Friend-eligibility check (About/spec.md §6.4) can
+        # see them.
+        for target_id, edge in edges.items():
             edge = edge.model_copy(
-                update={
-                    "shared_memory_ids": [*edge.shared_memory_ids, *memory_ids_by_target[target_id]],
-                    "contact_count": edge.contact_count + 1,
-                    "last_contact_tick": tick,
-                }
+                update={"shared_memory_ids": [*edge.shared_memory_ids, *memory_ids_by_target[target_id]]}
             )
-            max_shared = await _max_shared_importance(session, edge.shared_memory_ids)
-            edge = promote_if_eligible(edge, max_shared)
             await save_edge(session, edge)
-
-            relationship_deltas.append(
-                {
-                    "target_id": str(target_id),
-                    "trust_before": before_trust,
-                    "trust_after": edge.trust,
-                    "bond_state_before": before_state.value,
-                    "bond_state_after": edge.bond_state.value,
-                }
-            )
 
         event = EventRecord(
             id=seeded_uuid(rng),

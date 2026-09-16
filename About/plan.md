@@ -55,7 +55,7 @@ then move on.
 | M1 | Persona capture | IN PROGRESS | 2026-09-15 | |
 | M2 | Single agent, single tick | COMPLETE | 2026-09-16 | 2026-09-16 |
 | M3 | Two agents, first contact | COMPLETE | 2026-09-16 | 2026-09-16 |
-| M4 | **Recognition Metric — Gate 1** | NOT STARTED | | |
+| M4 | **Recognition Metric — Gate 1** | IN PROGRESS | 2026-09-16 | |
 | M5 | Small world, full social system | NOT STARTED | | |
 | M6 | Hosting, accounts, persistence | NOT STARTED | | |
 | M7 | Safety and moderation for real | NOT STARTED | | |
@@ -248,6 +248,21 @@ someone.
 
 **Gate 1 criterion:** mean recognition accuracy **≥ 70%** across subjects
 (`spec.md` §14).
+
+**Status (2026-09-16):** `RecognitionHarness` is built and T4.1/T4.2 are
+green (automated tests against synthetic event data). A real Groq provider
+is now configured and confirmed working end to end via live pilot runs
+(see `context.md` §11's updated A1 note) — persona-driven behavioural
+variance is real, and two live bugs it surfaced are fixed: the model
+hallucinating actions outside the registry (now given the closed action
+list explicitly) and relationship state changes not being scored as
+important per spec.md §5.1 (now fixed in `runtime/resolver.py`). T4.3 and
+the actual Gate 1 number are still not attempted: 2 agents can only ever
+produce ~2-3 high-importance events total (once per relationship pair),
+short of the 10-per-agent §14 needs. **This milestone's `run_world` CLI
+needs to be run against the real 4-5 M1 subjects, for a genuinely
+week-scale simulation**, before a real trial is possible — see the M1
+recruiting open item in `README.md`.
 
 ---
 

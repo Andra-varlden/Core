@@ -24,10 +24,20 @@ from otherworld.runtime.perception import Observation
 from otherworld.runtime.trace import DecisionTrace
 from otherworld.safety.registry import ActionRegistry, UnknownActionError
 
-_RESPONSE_INSTRUCTION = (
-    'Respond with JSON only: {"action": "<registered action name>", '
-    '"targets": [], "reasoning": "<why>"}.'
-)
+
+def _response_instruction() -> str:
+    # A real model given only "<registered action name>" will happily
+    # invent a plausible-sounding action that doesn't exist (observed live:
+    # a Groq-hosted model proposed "register_agent" on a first encounter —
+    # correctly rejected by the Validator's legality filter, but avoidable
+    # by just telling it the closed set up front instead of relying on
+    # containment to catch every guess after the fact).
+    actions = ", ".join(ActionRegistry.all_actions())
+    return (
+        "Respond with JSON only, no other text, no markdown code fences: "
+        '{"action": "<one of the actions listed below>", "targets": [], "reasoning": "<why>"}. '
+        f"Valid actions, and only these: {actions}."
+    )
 
 
 def _category_for(action_name: str) -> ActionCategory:
@@ -37,9 +47,26 @@ def _category_for(action_name: str) -> ActionCategory:
         return ActionCategory.INTERNAL
 
 
+def _extract_json_object(text: str) -> str:
+    """Real models often ignore "no markdown fences" and wrap the JSON in
+    ```json ... ``` anyway, or add a sentence before/after it. Try the raw
+    text first; if that fails, fall back to the first {...} span.
+    """
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = stripped.strip("`")
+        if stripped.startswith("json"):
+            stripped = stripped[4:]
+        stripped = stripped.strip()
+    start, end = stripped.find("{"), stripped.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return stripped[start : end + 1]
+    return stripped
+
+
 def _parse_completion(text: str) -> tuple[str, list[uuid.UUID], str]:
     try:
-        data = json.loads(text)
+        data = json.loads(_extract_json_object(text))
     except (json.JSONDecodeError, TypeError):
         return "idle", [], "unparseable completion"
 
@@ -83,7 +110,7 @@ class DecisionEngine:
             user_content += f" Agents you have never interacted with before: [{ids}]."
         if constraint_note:
             user_content += f" Constraint: {constraint_note}"
-        user_content += " " + _RESPONSE_INSTRUCTION
+        user_content += " " + _response_instruction()
 
         prompt = Prompt(system=bundle.identity_prompt, messages=[{"role": "user", "content": user_content}])
 
