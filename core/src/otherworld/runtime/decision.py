@@ -59,7 +59,8 @@ def _parse_completion(text: str) -> tuple[str, list[uuid.UUID], str]:
 
 
 def _observation_summary(observation: Observation, tick: int) -> str:
-    return f"Tick {tick}. Zone: {observation.zone}. Visible agents: {len(observation.visible_agents)}."
+    ids = ", ".join(str(a) for a in observation.visible_agents)
+    return f"Tick {tick}. Zone: {observation.zone}. Visible agents: [{ids}]."
 
 
 class DecisionEngine:
@@ -73,9 +74,13 @@ class DecisionEngine:
         tick: int,
         tier: Literal[1, 2],
         constraint_note: str | None = None,
+        unmet_agent_ids: list[uuid.UUID] | None = None,
     ) -> tuple[ProposedAction, DecisionTrace]:
         summary = _observation_summary(observation, tick)
         user_content = summary
+        if unmet_agent_ids:
+            ids = ", ".join(str(a) for a in unmet_agent_ids)
+            user_content += f" Agents you have never interacted with before: [{ids}]."
         if constraint_note:
             user_content += f" Constraint: {constraint_note}"
         user_content += " " + _RESPONSE_INSTRUCTION

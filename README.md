@@ -19,8 +19,8 @@ to owners and spectators as an ongoing story.
 | | |
 |---|---|
 | **Phase** | Phase 1 — Fidelity proof |
-| **Milestone** | M3 — Two agents, first contact (next up) |
-| **Status** | M0–M2 COMPLETE. M1 IN PROGRESS — capture pipeline built and tested (T1.1–T1.7 green); still need 3-4 more real persona objects captured via the CLI |
+| **Milestone** | M4 — Recognition Metric, Gate 1 (next up) |
+| **Status** | M0, M2, M3 COMPLETE. M1 IN PROGRESS — capture pipeline built and tested (T1.1–T1.7 green); still need 3-4 more real persona objects captured via the CLI before M4 can run |
 | **Gate ahead** | Gate 1 — Recognition accuracy ≥ 70% (at M4) |
 | **Last updated** | 2026-09-16 |
 
@@ -158,7 +158,7 @@ These are the things that must never quietly erode.
 | M0 | Foundations and schemas | COMPLETE |
 | M1 | Persona capture | IN PROGRESS |
 | M2 | Single agent, single tick | COMPLETE |
-| M3 | Two agents, first contact | NOT STARTED |
+| M3 | Two agents, first contact | COMPLETE |
 | M4 | **Recognition Metric — Gate 1** | NOT STARTED |
 | M5 | Small world, full social system | NOT STARTED |
 | M6 | Hosting, accounts, persistence | NOT STARTED |
@@ -208,6 +208,7 @@ Newest first. Format: `YYYY-MM-DD · #PR · milestone · change`
 
 | Date | PR | Milestone | Change |
 |---|---|---|---|
+| 2026-09-16 | — | M3 | Two-agent first contact built: the relationship engine (lazy edge materialisation, trust deltas matching `spec.md` §6.2 exactly, Stranger→Acquaintance→Friend promotion gated on both trust *and* a high-importance shared memory), witness memory writing, and the multi-agent scheduler — decisions computed concurrently but always applied in agent-id order, with a sequential first-encounter pre-pass so escalation trigger 1 fires exactly once per new pair rather than once per side. T3.1–T3.8 all green (70/70 tests); T3.9 (real per-vendor token counts) is honestly still blocked on a live provider key — `spec.md` §15.2 now says so explicitly instead of guessing numbers. |
 | 2026-09-16 | — | M2 | Tick loop built end to end: Compiler + Binder, the six-phase loop (perceive→retrieve→decide→validate→act→resolve), the Validator's four ordered filters (owner boundary, platform policy, real-person guard, world legality/containment), tick-based clock with no wall-clock dependency, seeded-RNG determinism (including id generation), decision tracing, and the tick scheduler with re-prompt-once-then-idle fallback. T2.1–T2.10 all green (56/56 tests), including the two non-negotiables: T2.2 determinism and T2.7 containment. Fixed a real bug the first run surfaced: the mock embedding provider produced 384-dim vectors against a 1536-dim pgvector column. |
 | 2026-09-15 | — | M1 | Persona capture built: Method A (30-item questionnaire), Method B (conversational interview, deterministic keyword extraction), Method C (writing-sample ingestion with name redaction), boundary compilation, versioned persistence (invariant I5), and an interactive CLI (`otherworld.cli.capture`) for real capture sessions. T1.1–T1.7 all green: 33/33 tests pass, ruff clean, mypy --strict clean. Test suite now runs against a dedicated `otherworld_test` database, separate from dev, after a fixture bug briefly wiped the dev schema. Two real bugs surfaced and fixed by an actual capture session: cross-method versioning created duplicate v1 rows instead of refining into v2, and a "no evidence" confidence value was diluting existing trait readings on merge. |
 | 2026-09-15 | — | M0 | Docs moved into `About/`. `core` scaffolded: Pydantic + SQLAlchemy models for every shape in `architecture.md` §9, the action registry (28 actions, matches §10 exactly), the `LLMProvider` protocol + deterministic mock provider, config reading every `spec.md` §20 key, Alembic migration, Docker Compose (Postgres 16 + pgvector, Redis), CI workflow. T0.1–T0.8 all green: 19/19 tests pass, ruff clean, mypy --strict clean on `models/` and `safety/`. |

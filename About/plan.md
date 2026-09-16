@@ -54,7 +54,7 @@ then move on.
 | M0 | Foundations and schemas | COMPLETE | 2026-09-15 | 2026-09-15 |
 | M1 | Persona capture | IN PROGRESS | 2026-09-15 | |
 | M2 | Single agent, single tick | COMPLETE | 2026-09-16 | 2026-09-16 |
-| M3 | Two agents, first contact | NOT STARTED | | |
+| M3 | Two agents, first contact | COMPLETE | 2026-09-16 | 2026-09-16 |
 | M4 | **Recognition Metric — Gate 1** | NOT STARTED | | |
 | M5 | Small world, full social system | NOT STARTED | | |
 | M6 | Hosting, accounts, persistence | NOT STARTED | | |

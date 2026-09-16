@@ -11,7 +11,7 @@
 > **Status:** Living document. Numbers marked **[TUNE]** are initial guesses to
 > be calibrated with data — treat them as starting points, not facts.
 >
-> **Last updated:** 2026-09-14
+> **Last updated:** 2026-09-16
 
 ---
 
@@ -796,9 +796,26 @@ cost_per_agent_day =
 | `tier0_share` | 0.85 **[TUNE]** | Target |
 | `tier1_share` | 0.12 **[TUNE]** | Target |
 | `tier2_share` | 0.03 **[TUNE]** | Target |
-| `tokens_tier1` (in+out) | ~1,200 **[TUNE]** | Measure at M3 |
-| `tokens_tier2` (in+out) | ~4,000 **[TUNE]** | Measure at M3 |
+| `tokens_tier1` (in+out) | ~1,200 **[TUNE]**, still a target not a measurement | See note below |
+| `tokens_tier2` (in+out) | ~4,000 **[TUNE]**, still a target not a measurement | See note below |
 | `reflections_per_agent_day` | ~58 (every 150 ticks) | §5.3 |
+
+**T3.9 status, M3 (2026-09-16):** decision tracing now records real
+`input_tokens`/`output_tokens` on every Tier 1/2 decision
+(`architecture.md` §17's `DecisionTrace`), and a two-agent M3 simulation run
+measured them: Tier 1 averaged ~60 input / 16 output tokens over 119
+decisions, Tier 2 averaged ~82 input / 16 output over 1 decision. **These
+are not the real per-vendor-tokenizer numbers the `[TUNE]` estimates above
+call for** — two reasons: (1) no LLM provider key is configured yet
+(`README.md` open items), so both the token counts and the completions
+themselves come from `MockLLMProvider`'s `len(text)//4` heuristic and a
+fixed mock completion, not a real tokenizer or model; (2) the M2/M3 prompt
+is still minimal — `runtime/decision.py` fetches retrieved memories for the
+trace but does not yet inject their content into the prompt text, so
+current prompt sizes are well below what a persona-grounded, memory-aware
+Tier 1/2 prompt will actually cost. Re-measure once both are true: a real
+provider key exists and the prompt includes persona identity + retrieved
+memory content in full.
 
 ### 15.3 Rate table — **POPULATE BEFORE USE**
 
