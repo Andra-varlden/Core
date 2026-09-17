@@ -16,6 +16,8 @@ from otherworld.llm.protocol import Completion, Prompt
 from otherworld.models.memory import EMBEDDING_DIM
 
 _UNMET_AGENTS_RE = re.compile(r"never interacted with before: \[([^\]]*)\]")
+_REFLECTION_MARKER = "Memories since your last reflection"
+_SUBJECTS_RE = re.compile(r"\[subjects: ([^\]]*)\]")
 
 
 class MockLLMProvider:
@@ -41,6 +43,24 @@ class MockLLMProvider:
     def _respond(self, prompt: Prompt, model: str) -> Completion:
         joined = prompt.system + "".join(m.get("content", "") for m in prompt.messages)
         digest = hashlib.sha256(joined.encode()).hexdigest()[:8]
+
+        # `runtime/reflection.py` sends a belief-shaped prompt, not an
+        # action-shaped one — exercising real belief creation in simulation
+        # tests (T5.9) needs a deterministic response here too, not just an
+        # empty completion that `_parse_beliefs` quietly discards.
+        if _REFLECTION_MARKER in joined:
+            subject_match = _SUBJECTS_RE.search(joined)
+            about_agent_id = subject_match.group(1).split(",")[0].strip() if subject_match else None
+            belief = {
+                "text": f"mock-{digest}: I've been noticing a pattern lately.",
+                "about_agent_id": about_agent_id,
+                # Deterministic sign from the digest, so some mock beliefs
+                # exercise gossip's pile-on path (About/spec.md §8.2 needs a
+                # *negative* inherited belief) without every belief being one.
+                "valence": -0.6 if int(digest, 16) % 2 == 0 else 0.6,
+            }
+            belief_json = json.dumps({"beliefs": [belief]})
+            return Completion(text=belief_json, input_tokens=len(joined) // 4, output_tokens=16, model=model)
 
         # A simple, deterministic default: greet someone you've never met.
         # A real Tier-2 model would very plausibly do this too; scripting it

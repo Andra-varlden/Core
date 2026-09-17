@@ -5,8 +5,14 @@ Friend promotion gate.
 import uuid
 
 from otherworld.models.relationship import BondState, RelationshipEdge
-from otherworld.social.engine import TRUST_DELTAS, apply_trust_delta, is_friend_eligible, ordered_pair
-from otherworld.social.state_machine import promote_if_eligible
+from otherworld.social.engine import (
+    TRUST_DELTAS,
+    apply_trust_decay,
+    apply_trust_delta,
+    is_friend_eligible,
+    ordered_pair,
+)
+from otherworld.social.state_machine import apply_decay, attempt_reconciliation, promote_if_eligible
 
 # Hand-computed fixture: exact values from About/spec.md §6.2.
 _SPEC_6_2_FIXTURE = {
@@ -21,13 +27,16 @@ _SPEC_6_2_FIXTURE = {
 
 
 def _edge(
-    trust: float = 0.0, bond_state: BondState = BondState.STRANGER, shared_memory_ids=None
+    trust: float = 0.0,
+    bond_state: BondState = BondState.STRANGER,
+    shared_memory_ids=None,
+    last_contact_tick: int = 0,
 ) -> RelationshipEdge:
     a, b = sorted([uuid.uuid4(), uuid.uuid4()], key=str)
     return RelationshipEdge(
         id=uuid.uuid4(), world_id=uuid.uuid4(), agent_a_id=a, agent_b_id=b,
         trust=trust, bond_state=bond_state, shared_memory_ids=shared_memory_ids or [],
-        last_contact_tick=0, created_tick=0,
+        last_contact_tick=last_contact_tick, created_tick=0,
     )
 
 
@@ -85,3 +94,76 @@ def test_high_importance_memory_alone_does_not_promote_without_trust():
     edge = _edge(trust=0.10, bond_state=BondState.ACQUAINTANCE)  # below 0.35 threshold
     updated = promote_if_eligible(edge, max_shared_memory_importance=0.9)
     assert updated.bond_state == BondState.ACQUAINTANCE
+
+
+def test_friend_promotes_to_close_bond_with_repaired_conflict():
+    edge = _edge(trust=0.75, bond_state=BondState.FRIEND)
+    updated = promote_if_eligible(edge, max_shared_memory_importance=0.9, has_repaired_conflict=True)
+    assert updated.bond_state == BondState.CLOSE_BOND
+
+
+def test_friend_promotes_to_close_bond_with_costly_loyalty_act():
+    edge = _edge(trust=0.75, bond_state=BondState.FRIEND)
+    updated = promote_if_eligible(edge, max_shared_memory_importance=0.9, costly_loyalty_act_this_tick=True)
+    assert updated.bond_state == BondState.CLOSE_BOND
+
+
+def test_friend_does_not_promote_to_close_bond_without_a_qualifying_event():
+    edge = _edge(trust=0.95, bond_state=BondState.FRIEND)
+    updated = promote_if_eligible(edge, max_shared_memory_importance=0.9)
+    assert updated.bond_state == BondState.FRIEND
+
+
+def test_apply_decay_demotes_friend_below_threshold():
+    edge = _edge(trust=0.20, bond_state=BondState.FRIEND)
+    assert apply_decay(edge, current_tick=0).bond_state == BondState.ACQUAINTANCE
+
+
+def test_apply_decay_demotes_stale_acquaintance_to_stranger():
+    edge = _edge(trust=0.01, bond_state=BondState.ACQUAINTANCE, last_contact_tick=0)
+    unchanged = apply_decay(edge, current_tick=500)  # not stale enough yet
+    assert unchanged.bond_state == BondState.ACQUAINTANCE
+    demoted = apply_decay(edge, current_tick=1500)
+    assert demoted.bond_state == BondState.STRANGER
+
+
+def test_trust_decay_matches_spec_formula_and_halves_for_seeded_edges():
+    edge = _edge(trust=0.5, last_contact_tick=0)
+    decayed = apply_trust_decay(edge, current_tick=1000)
+    expected = max(-1.0, 0.5 - 0.0008 * 1000)
+    assert abs(decayed.trust - expected) < 1e-9
+
+    seeded = edge.model_copy(update={"seeded": True})
+    seeded_decayed = apply_trust_decay(seeded, current_tick=1000)
+    assert seeded_decayed.trust > decayed.trust  # decays at half rate
+
+
+def test_trust_decay_is_a_noop_before_the_grace_period():
+    edge = _edge(trust=0.5, last_contact_tick=0)
+    assert apply_trust_decay(edge, current_tick=100).trust == 0.5
+
+
+def test_reconciliation_from_broken_via_forgive():
+    edge = _edge(bond_state=BondState.BROKEN)
+    reconciled = attempt_reconciliation(edge, "forgive")
+    assert reconciled.bond_state == BondState.ACQUAINTANCE
+
+
+def test_reconciliation_from_feud_steps_down_to_broken_not_acquaintance():
+    """Feud has no reconciliation path in spec.md's own transition table —
+    About/plan.md T5.1's run found it's a true absorbing state without one.
+    Escaping it should take two deliberate `forgive`s, not one: Feud is
+    strictly worse than Broken, so it shouldn't be cheaper to recover from.
+    """
+    edge = _edge(bond_state=BondState.FEUD)
+    after_first_forgive = attempt_reconciliation(edge, "forgive")
+    assert after_first_forgive.bond_state == BondState.BROKEN
+
+    after_second_forgive = attempt_reconciliation(after_first_forgive, "forgive")
+    assert after_second_forgive.bond_state == BondState.ACQUAINTANCE
+
+
+def test_reconciliation_does_not_fire_on_other_actions():
+    edge = _edge(bond_state=BondState.BROKEN)
+    unchanged = attempt_reconciliation(edge, "greet")
+    assert unchanged.bond_state == BondState.BROKEN

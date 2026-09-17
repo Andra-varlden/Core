@@ -325,6 +325,144 @@ M5 is where the work is.
 **Exit criterion:** T5.1–T5.16. T5.15 and T5.16 are the ones that actually
 matter; the rest are hygiene.
 
+**Status (2026-09-16):** Built and unit/integration tested (real Postgres,
+not mocks): the full conflict system (`social/conflict.py` — all five
+triggers, scar effect, cooling periods, repair-probability roll, all three
+terminal transitions) wired into `runtime/resolver.py` so `betray`/`take`/
+`apologise`/`forgive`/escalation actions actually drive it; the extended
+bond state machine (Close bond, decay-driven demotion, Broken →
+Acquaintance reconciliation); reflection and belief formation
+(`runtime/reflection.py`, schedule- or importance-triggered, mandatory
+persona re-grounding); memory compression (`runtime/compression.py`, cap
+enforcement, conflict-linked memories protected); the goal stack
+(`runtime/goals.py` — formation, abandonment, staleness pruning, and
+goal-coupling adoption against the spec formula, gated to Tier-2
+interactions with actual targets for cost control); the minimal tile world
+(`world/map.py`, `world/pathfinding.py`, `world/proximity.py` — A*,
+Chebyshev distance, five starter zones, no renderer) with perception now
+genuinely proximity-gated instead of M2/M3's "everyone is visible" stand-in;
+and exogenous event *scheduling* (`world/exogenous.py`). Gossip propagation
+(`social/gossip.py`) is now wired end-to-end through the `confide` action:
+`runtime/decision.py` surfaces an agent's own gossip-eligible beliefs (from
+whatever `RetrievalService` already retrieved) with their ids, the model
+picks one plus a listener, and `runtime/resolver.py` runs the full
+propagation pipeline — hop limit and pile-on damping enforced against real
+`hop_count`/`valence` fields on `MemoryRecord`, checked against the
+database before writing the listener's new, distorted belief. Faction
+detection (`social/factions.py`) now runs as a real periodic scan inside
+`MultiAgentTickScheduler` (every `factions.scan_interval_ticks`), with
+cross-scan persistence tracking for the exclusion signal's 1,000-tick
+requirement.
+
+**Known gaps:** exogenous events fire on schedule but have no mechanical
+effect yet (no resource/feature system to act on). `social/gossip.py`'s
+`weighted_belief_strength` (direct-experience-outweighs-inherited-belief)
+isn't invoked in the live path — there's no belief-*consolidation* step
+anywhere in this codebase yet, so each retelling is written as its own
+record rather than merged against what the listener already believes.
+
+**T5.1 attempted and completed (2026-09-17):** a real 20-agent, 10,000-tick
+run (`otherworld.cli.acceptance_run`, `ScenarioMockProvider` — see that
+module's docstring for why a plain mock or a real LLM aren't right for this
+specific test) against real Postgres. First attempt stalled completely
+within ~100 ticks; getting a genuinely completing run surfaced and fixed
+five real, previously-undetected bugs, all invisible at the ≤2-agent,
+≤500-tick scale every earlier test ran at:
+
+1. `runtime/retrieval.py` fetched an agent's *entire* memory history and
+   scored it in a pure-Python loop, every decision, every tick — O(ticks²)
+   overall. Fixed: bounded candidate pools via two indexed queries (recent,
+   important), cosine relevance computed by pgvector in SQL instead of a
+   1536-dimension Python loop. Cut a 150-tick profiled run from 1150s to
+   396s by itself.
+2. `runtime/compression.py` protected *every* memory in a conflicted edge's
+   `shared_memory_ids` from compression — but that list grows unboundedly
+   with every interaction, so any busy, ever-conflicted pair permanently
+   shielded its whole shared history. Several agents were observed 1.5x+
+   over the episodic cap and still climbing. Fixed: only the most recent
+   entries per edge are protected.
+3. `social/gossip.py`'s pile-on check did an unindexed full-table scan
+   across all agents' memories on every `confide`. Fixed with a GIN index
+   on the `subjects` array column.
+4. `social/conflict.py`'s `open_conflict` only blocked new triggers while
+   `Strained` — a `Feud` or `Broken` edge kept accumulating conflict
+   records forever, each with its own O(log) scan on every subsequent
+   interaction. Fixed by blocking new triggers in those terminal states.
+5. `cli/acceptance_run.py` held one SQLAlchemy session for the whole run;
+   with `expire_on_commit=False` (`db.py`), every ORM object the session
+   ever touched stayed pinned in its identity map for the run's lifetime —
+   real, unbounded *process* memory growth, and what actually got the first
+   full-scale attempt killed by the OS for low memory. Fixed with periodic
+   `session.expunge_all()`.
+
+Postgres's own autovacuum also needed retuning (`fillfactor` + one manual
+`VACUUM FULL` on `relationship_edges`, a ~100-row table that MVCC-bloated to
+19-26MB from being rewritten on nearly every interaction) — a real
+infrastructure finding, not a code bug, and one a production deployment of
+this scheduler design would need to plan for (periodic maintenance windows,
+or a persistence strategy less prone to per-interaction MVCC churn).
+
+**Results against T5.1–T5.16, this run:**
+
+| # | Result |
+|---|---|
+| T5.1 | **Pass.** 10,000 ticks, 20 agents, 200,000 events, no crash. Process memory stayed flat (~100-300MB) for the full ~3.5 hour run once the fixes above landed. |
+| T5.2 | Not retested at this scale (a mechanism-level guarantee — agent-id ordering + seeded RNG — already covered by the existing, unmodified determinism tests at smaller scale). |
+| T5.3 | Numerically passes (0% Friend+) but **vacuously** — see T5.7. |
+| T5.4 | Numerically passes (0% Close bond) but **vacuously** — see T5.7. |
+| T5.5 | Not instrumented by this run's report. |
+| T5.6 | **Fails.** Only `BETRAYAL` observed (125 times). `RESOURCE_COMPETITION`, `VALUE_CLASH`, `NEGLECT`, `CONTAGION` never fired — the latter three are scan-tied triggers with no periodic maintenance scan ever built (`social/maintenance.py` from the original M5 task list doesn't exist); `RESOURCE_COMPETITION` needs an *unwitnessed* `take`, and this run's clustered agents are almost always mutually visible, so `take` resolves to `BETRAYAL` instead almost every time. |
+| T5.7 | **Fails.** `repaired` (55) and `feud` (62) both occurred; `broken` never did, and by the end **every one of the 62 materialised edges was in Feud** — a real design gap, not noise: `open_conflict`'s only path to `Strained → Broken` is `check_strained_timeout`, which (like the scan-tied triggers above) is never called by the live tick loop, and `Feud` has no reconciliation path at all in `state_machine.py` (only `Broken → Acquaintance` via `forgive` exists) — so once busy pairs reach Feud under a hostile-leaning action mix, there is no way back, and the world saturates. |
+| T5.8 | **Pass.** 33 of 62 edges show a repeated-theme scarred conflict. |
+| T5.9 | **Pass.** Max episodic count on any agent: exactly 2,000 — held at the cap, not past it (contrast with the pre-fix behaviour above). |
+| T5.10 | Not exercised — see T5.11. |
+| T5.11 | Not exercised: of 29,449 beliefs formed, none show `hop_count > 0`, meaning `confide`-driven propagation essentially never fired this run. Root cause not fully chased down; plausibly `ScenarioMockProvider`'s reflection response usually resolves `about_agent_id` back to the reflecting agent itself (not a real third party), leaving little gossip-eligible material. |
+| T5.12 | Pass (covered by `tests/unit/test_pathfinding.py`, not this run — no movement occurs in this run's setup). |
+| T5.13 | **Fails.** Tier 0 = 25.2%, Tier 2 = 0.0085%. Tier 2 comfortably clears its ≤5% ceiling, but Tier 0 falls well short of ≥80% — expected, not a bug: the sleep window is the only Tier-0 behaviour that exists (`move_to` actually consuming an A* path tick-by-tick was never wired this milestone), so Tier 0 is capped at roughly the sleep-window's share of the day regardless of population or duration. |
+| T5.14 | N/A — mock provider, no real token cost to measure. |
+| T5.15 | N/A — needs real captured personas and a real LLM at Recognition-Metric scale; out of scope for a synthetic run. |
+| T5.16 | N/A — no highlight/narration engine exists yet (Output plane, M10). |
+
+**Reading this honestly:** the *mechanics* work — conflicts open, scar,
+repair, and the system runs stably at scale once the five bugs above were
+fixed. What it also shows is that this specific action mix (`Scenario
+MockProvider`, deliberately more conflict-heavy than a real persona
+population to make sure every mechanism got exercised at all) plus two
+real missing pieces — periodic conflict maintenance (scan-tied triggers,
+Strained-timeout-to-Broken) and any Feud recovery path — makes Feud an
+absorbing state that the whole population eventually falls into.
+
+**Both gaps are now closed** (2026-09-17), against T5.6/T5.7 directly:
+
+- `social/maintenance.py` (new): a periodic whole-graph scan, run every
+  `maintenance.scan_interval_ticks` (default 50) from
+  `scheduler.run_tick()`, that actually invokes `apply_trust_decay`,
+  `apply_decay`, `check_strained_timeout`, and `check_feud_escalation` —
+  all four existed as tested pure functions before this but nothing in the
+  live tick loop ever called them, which is exactly why T5.1 never
+  observed a `Broken` transition or any trigger but `BETRAYAL`. The scan
+  also detects `NEGLECT` (stale high-trust edges) and `CONTAGION`
+  (hostility inherited from a Friend+ edge to someone in Feud, scaled by
+  the receiving agent's `loyalty * (1 - independence)`, per spec.md §3).
+  `VALUE_CLASH` is still undetected — goals are free-text with no
+  structured "mutually exclusive with X" representation to check against,
+  a documented gap rather than a silent one.
+- `state_machine.py`'s `attempt_reconciliation`: Feud is no longer a true
+  absorbing state. It now takes two deliberate `forgive`s to escape
+  (Feud → Broken → Acquaintance) rather than one, since Feud is strictly
+  worse than Broken and shouldn't be equally cheap to recover from.
+  `resolver.py`'s reconciliation guard now routes both `Broken` and `Feud`
+  edges through it (previously only `Broken`).
+
+Covered by 7 new DB-backed simulation tests
+(`tests/simulation/test_maintenance.py`) plus 5 new unit tests
+(`test_conflict.py`, `test_social_engine.py`) — 41/41 green, ruff/mypy
+clean. **Not yet re-verified at acceptance-run scale**: whether this
+actually stops a 20-agent/10,000-tick population from saturating into
+Feud (rather than just proving each mechanism fires in isolation) needs a
+fresh timed run, which hasn't been kicked off given the multi-hour cost of
+the last one.
+
 ---
 
 ## 6. Phase 2 — Closed multi-owner alpha

@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import random
 import uuid
+from datetime import datetime
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,12 +21,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from otherworld.llm.protocol import LLMProvider
 from otherworld.models.agent import Position
 from otherworld.models.events import EventRecord, event_to_orm
-from otherworld.models.memory import MemoryKind, MemoryRecord, MemoryRecordORM, memory_to_orm
-from otherworld.models.relationship import RelationshipEdge
+from otherworld.models.memory import MemoryKind, MemoryRecord, MemoryRecordORM, memory_from_orm, memory_to_orm
+from otherworld.models.relationship import BondState, RelationshipEdge
+from otherworld.persona.compiler import AgentBundle
 from otherworld.runtime.clock import tick_to_datetime
 from otherworld.runtime.determinism import seeded_uuid
-from otherworld.social.engine import apply_trust_delta, get_or_create_edge, save_edge
-from otherworld.social.state_machine import is_social_interaction, promote_if_eligible
+from otherworld.social.conflict import apply_conflict_consequences
+from otherworld.social.engine import TRUST_DELTAS, apply_trust_delta, get_or_create_edge, save_edge
+from otherworld.social.gossip import GossipService, check_pileon_for_subject, save_propagated_belief
+from otherworld.social.state_machine import (
+    attempt_reconciliation,
+    has_repaired_conflict,
+    is_costly_loyalty_act,
+    is_social_interaction,
+    promote_if_eligible,
+)
+
+_GOSSIP_ACTION = "confide"
 
 # Base importance per event class, About/spec.md §5.1. Actions not listed
 # here default to the routine baseline. First encounters and relationship
@@ -67,6 +80,46 @@ async def _max_shared_importance(session: AsyncSession, memory_ids: list[uuid.UU
     return max(rows, default=0.0)
 
 
+async def _maybe_gossip(
+    session: AsyncSession,
+    provider: LLMProvider,
+    rng: random.Random,
+    actor_id: uuid.UUID,
+    listener_id: uuid.UUID,
+    params: dict[str, Any],
+    trust_ab: float,
+    tick: int,
+    created_at: datetime,
+) -> None:
+    """`confide` sharing a belief — About/spec.md §8.1's gossip pipeline. A
+    no-op if `params` doesn't carry a valid `belief_id`/`about_agent_id`
+    (a legitimate, un-modelled use of `confide` — the model chose it without
+    gossip content) or if the referenced belief doesn't check out (not the
+    actor's, not actually about who they claimed).
+    """
+    try:
+        belief_id = uuid.UUID(str(params.get("belief_id")))
+        about_agent_id = uuid.UUID(str(params.get("about_agent_id")))
+    except (TypeError, ValueError):
+        return
+
+    row = await session.get(MemoryRecordORM, belief_id)
+    if row is None or row.agent_id != actor_id or row.kind != MemoryKind.BELIEF.value:
+        return
+    if about_agent_id not in row.subjects:
+        return
+
+    pileon = await check_pileon_for_subject(session, about_agent_id, excluding_agent_id=listener_id)
+    if pileon.suppressed:
+        return
+
+    propagated = await GossipService.propagate(
+        provider, rng, memory_from_orm(row), listener_id, about_agent_id, trust_ab, tick, created_at
+    )
+    if propagated is not None:
+        await save_propagated_belief(session, propagated)
+
+
 class Resolver:
     @staticmethod
     async def resolve(
@@ -82,6 +135,8 @@ class Resolver:
         reasoning: str,
         witnesses: list[uuid.UUID] | None = None,
         first_encounter: bool = False,
+        bundles: dict[uuid.UUID, AgentBundle] | None = None,
+        params: dict[str, Any] | None = None,
     ) -> EventRecord:
         """`first_encounter`: whether any of `targets` was unmet before this
         tick. Passed in by the caller rather than inferred from edge
@@ -94,7 +149,13 @@ class Resolver:
         """
         witnesses = witnesses or []
         created_at = tick_to_datetime(tick)
-        social = is_social_interaction(action) and bool(targets)
+        # `take` (About/spec.md §7.1's RESOURCE_COMPETITION trigger, and
+        # TRUST_DELTAS) is categorised MATERIAL, not SOCIAL/RELATIONAL — it
+        # still carries a modelled relationship consequence, so it must
+        # reach the edge-update loop below even though it isn't a "social
+        # interaction" in the narrower, category sense `is_social_interaction`
+        # tests for elsewhere (Friend-eligibility, close-bond gating).
+        social = (is_social_interaction(action) or action in TRUST_DELTAS) and bool(targets)
 
         # Resolve trust and bond-state consequences first, using only
         # shared memories that already existed before this tick — this
@@ -115,8 +176,29 @@ class Resolver:
             edge = edge.model_copy(
                 update={"contact_count": edge.contact_count + 1, "last_contact_tick": tick}
             )
+
+            if edge.bond_state in (BondState.BROKEN, BondState.FEUD):
+                edge = attempt_reconciliation(edge, action)
+            else:
+                target_traits = (bundles or {}).get(target_id)
+                weights = target_traits.decision_weights if target_traits else {}
+                edge = apply_conflict_consequences(
+                    edge,
+                    action,
+                    witnessed=bool(witnesses),
+                    tick=tick,
+                    rng=rng,
+                    target_forgiveness=weights.get("forgiveness", 0.5),
+                    target_grudge_retention=weights.get("grudge_retention", 0.5),
+                )
+
             max_shared = await _max_shared_importance(session, edge.shared_memory_ids)
-            edge = promote_if_eligible(edge, max_shared)
+            edge = promote_if_eligible(
+                edge,
+                max_shared,
+                has_repaired_conflict=has_repaired_conflict(edge),
+                costly_loyalty_act_this_tick=is_costly_loyalty_act(action),
+            )
 
             edges[target_id] = edge
             state_changed = state_changed or edge.bond_state != before_state
@@ -192,6 +274,12 @@ class Resolver:
                 update={"shared_memory_ids": [*edge.shared_memory_ids, *memory_ids_by_target[target_id]]}
             )
             await save_edge(session, edge)
+
+        if action == _GOSSIP_ACTION and len(targets) == 1 and targets[0] in edges:
+            await _maybe_gossip(
+                session, provider, rng, actor_id, targets[0], params or {},
+                edges[targets[0]].trust, tick, created_at,
+            )
 
         event = EventRecord(
             id=seeded_uuid(rng),

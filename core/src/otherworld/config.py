@@ -75,6 +75,24 @@ class GoalsConfig(BaseModel):
     stale_ticks: int = 200
 
 
+class FactionsConfig(BaseModel):
+    scan_interval_ticks: int = 500
+    min_clique_size: int = 3
+    min_clique_degree_for_pair: int = 2
+    exclusion_acquaintance_threshold: int = 3
+    exclusion_persistence_ticks: int = 1000
+
+
+class MaintenanceConfig(BaseModel):
+    """The periodic relationship-maintenance scan (`social/maintenance.py`):
+    trust decay, decay-driven demotion, Strained timeout/escalation, and the
+    scan-tied conflict triggers (NEGLECT, CONTAGION) — none of which are
+    tied to any single action, so nothing in `runtime/resolver.py` ever
+    checks them on its own."""
+
+    scan_interval_ticks: int = 50
+
+
 class BehaviourConfig(BaseModel):
     approach_sociability_weight: float = 0.6
     approach_curiosity_weight: float = 0.4
@@ -129,6 +147,8 @@ class Settings(BaseSettings):
     conflict: ConflictConfig = ConflictConfig()
     gossip: GossipConfig = GossipConfig()
     goals: GoalsConfig = GoalsConfig()
+    factions: FactionsConfig = FactionsConfig()
+    maintenance: MaintenanceConfig = MaintenanceConfig()
     behaviour: BehaviourConfig = BehaviourConfig()
     tiering: TieringConfig = TieringConfig()
     output: OutputConfig = OutputConfig()

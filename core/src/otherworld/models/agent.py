@@ -52,6 +52,7 @@ class Agent(BaseModel):
     goals: list[Goal] = Field(default_factory=list)
     current_path: list[tuple[int, int]] = Field(default_factory=list)
     last_tick: int = 0
+    last_reflection_tick: int = 0
     created_at: datetime
 
 
@@ -68,6 +69,7 @@ class AgentORM(Base):
     goals: Mapped[list[Any]] = mapped_column(JSON, default=list)
     current_path: Mapped[list[Any]] = mapped_column(JSON, default=list)
     last_tick: Mapped[int] = mapped_column(Integer, default=0)
+    last_reflection_tick: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
@@ -83,6 +85,7 @@ def agent_to_orm(agent: Agent) -> AgentORM:
         goals=[g.model_dump(mode="json") for g in agent.goals],
         current_path=[list(p) for p in agent.current_path],
         last_tick=agent.last_tick,
+        last_reflection_tick=agent.last_reflection_tick,
         created_at=agent.created_at,
     )
 
@@ -99,5 +102,6 @@ def agent_from_orm(row: AgentORM) -> Agent:
         goals=[Goal.model_validate(g) for g in row.goals],
         current_path=[tuple(p) for p in row.current_path],
         last_tick=row.last_tick,
+        last_reflection_tick=row.last_reflection_tick,
         created_at=row.created_at,
     )

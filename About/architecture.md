@@ -574,6 +574,7 @@ class Agent(BaseModel):
     goals: list[Goal]
     current_path: list[tuple[int, int]]   # remaining A* path, Tier 0 walking
     last_tick: int
+    last_reflection_tick: int = 0         # reflection.py's schedule check reads this
     created_at: datetime
 ```
 
@@ -595,6 +596,8 @@ class MemoryRecord(BaseModel):
     subjects: list[UUID]              # agents this memory is about
     source_event_id: UUID | None
     derived_from: list[UUID]          # for beliefs: the memories synthesised
+    hop_count: int = 0                # beliefs only: 0 = formed directly, never gossiped (spec.md §8.1)
+    valence: float = 0.0              # beliefs only: -1.0..1.0, drives pile-on damping (spec.md §8.2)
     created_at: datetime
 ```
 

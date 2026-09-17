@@ -1085,6 +1085,13 @@ goals:
   max_concurrent: 3
   stale_ticks: 200
 
+factions:
+  scan_interval_ticks: 500
+  min_clique_size: 3
+  min_clique_degree_for_pair: 2
+  exclusion_acquaintance_threshold: 3
+  exclusion_persistence_ticks: 1000
+
 behaviour:
   approach_sociability_weight: 0.6
   approach_curiosity_weight: 0.4

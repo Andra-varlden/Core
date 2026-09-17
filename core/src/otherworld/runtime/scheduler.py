@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import random
 import uuid
-from typing import Literal
+from typing import Any, Literal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,16 +27,33 @@ from otherworld.llm.protocol import LLMProvider
 from otherworld.models.agent import Agent
 from otherworld.models.events import EventRecord, Rejection, ValidatedAction
 from otherworld.models.memory import MemoryRecord
+from otherworld.models.relationship import BondState
 from otherworld.persona.compiler import AgentBundle
 from otherworld.runtime.clock import tick_to_datetime
+from otherworld.runtime.compression import compress_if_over_cap
 from otherworld.runtime.decision import DecisionEngine
 from otherworld.runtime.determinism import seeded_uuid
+from otherworld.runtime.goals import abandon_goal, form_goal, maybe_adopt_goal, prune_stale_goals
 from otherworld.runtime.perception import Observation, PerceptionService
+from otherworld.runtime.reflection import ReflectionService, is_reflection_due
 from otherworld.runtime.resolver import Resolver
 from otherworld.runtime.retrieval import RetrievalService
 from otherworld.runtime.trace import TraceLog
 from otherworld.safety.validator import Validator
-from otherworld.social.engine import get_or_create_edge
+from otherworld.social.engine import get_all_edges, get_edge, get_or_create_edge
+from otherworld.social.factions import (
+    Clique,
+    ExclusionCandidate,
+    FactionPair,
+    find_cliques,
+    find_exclusion_candidates,
+    find_faction_pairs,
+)
+from otherworld.social.maintenance import run_maintenance_scan
+from otherworld.world.exogenous import ExogenousEvent, ExogenousEventScheduler
+from otherworld.world.proximity import agents_within_radius
+
+_COUPLING_ELIGIBLE_BOND_STATES = (BondState.FRIEND, BondState.CLOSE_BOND)
 
 _MINUTES_PER_DAY = 24 * 60
 _SLEEP_WINDOW_END_HOUR = 6  # [TUNE] midnight-6am; a persona-derived window is later work
@@ -134,6 +151,7 @@ class TickScheduler:
             action_name,
             targets,
             reasoning,
+            bundles={self.agent.id: self.bundle},
         )
         self.agent.last_tick = tick
         return event
@@ -180,14 +198,81 @@ class MultiAgentTickScheduler:
         self.rng = rng
         self.world_id = world_id
         self.agents = sorted(agents, key=lambda a: a.id)
+        self.agents_by_id = {a.id: a for a in self.agents}
         self.bundles = bundles
         self.trace_log = TraceLog()
+        self.exogenous_scheduler = ExogenousEventScheduler(rng)
+        self.exogenous_events_fired: list[ExogenousEvent] = []
+        self._last_faction_scan_tick: int | None = None
+        self.cliques: list[Clique] = []
+        self.faction_pairs: list[FactionPair] = []
+        self.exclusion_signals: list[ExclusionCandidate] = []
+        self._exclusion_first_seen: dict[tuple[uuid.UUID, frozenset[uuid.UUID]], int] = {}
+        self._last_maintenance_scan_tick: int | None = None
+
+    async def _maybe_run_maintenance(self, tick: int) -> None:
+        """Trust decay, decay-driven demotion, Strained timeout/escalation,
+        and the scan-tied conflict triggers (About/social/maintenance.py) —
+        another whole-graph batch computation with nothing to hang off a
+        single agent's action, so it runs on the same kind of periodic
+        check as `_maybe_scan_factions` rather than every tick.
+        """
+        due = (
+            self._last_maintenance_scan_tick is None
+            or tick - self._last_maintenance_scan_tick >= settings.maintenance.scan_interval_ticks
+        )
+        if not due:
+            return
+        self._last_maintenance_scan_tick = tick
+        await run_maintenance_scan(self.session, self.world_id, self.bundles, self.rng, tick)
+
+    async def _maybe_scan_factions(self, tick: int) -> None:
+        """About/spec.md §8.3, recomputed every `factions.scan_interval_ticks`
+        — a whole-graph batch computation, not tied to any agent's action,
+        so it runs once per tick check (not once per agent) alongside the
+        exogenous event scheduler above.
+        """
+        due = (
+            self._last_faction_scan_tick is None
+            or tick - self._last_faction_scan_tick >= settings.factions.scan_interval_ticks
+        )
+        if not due:
+            return
+        self._last_faction_scan_tick = tick
+
+        edges = await get_all_edges(self.session, self.world_id)
+        self.cliques = find_cliques(edges)
+        self.faction_pairs = find_faction_pairs(edges, self.cliques)
+
+        candidates = find_exclusion_candidates(edges, self.cliques)
+        current_keys = {(c.agent_id, c.clique.members) for c in candidates}
+        for key in list(self._exclusion_first_seen):
+            if key not in current_keys:
+                del self._exclusion_first_seen[key]  # no longer excluded — resets persistence
+        for candidate in candidates:
+            self._exclusion_first_seen.setdefault((candidate.agent_id, candidate.clique.members), tick)
+
+        self.exclusion_signals = [
+            c
+            for c in candidates
+            if tick - self._exclusion_first_seen[(c.agent_id, c.clique.members)]
+            >= settings.factions.exclusion_persistence_ticks
+        ]
 
     async def _materialise_new_encounters(
         self, tick: int
     ) -> tuple[dict[uuid.UUID, list[uuid.UUID]], dict[uuid.UUID, list[uuid.UUID]]]:
+        # Chebyshev-radius visibility (About/spec.md §9.1's perception_radius),
+        # not "everyone in the world" — M2/M3 tests all colocate agents at
+        # the same position, so this is a strict fidelity upgrade for them
+        # (still mutually visible, distance 0) rather than a behaviour change.
         visible_by_agent = {
-            agent.id: [a.id for a in self.agents if a.id != agent.id] for agent in self.agents
+            agent.id: agents_within_radius(
+                agent.position,
+                {a.id: a.position for a in self.agents if a.id != agent.id},
+                settings.world.perception_radius,
+            )
+            for agent in self.agents
         }
         newly_met: dict[uuid.UUID, list[uuid.UUID]] = {agent.id: [] for agent in self.agents}
 
@@ -237,7 +322,7 @@ class MultiAgentTickScheduler:
 
     async def _decide_for_agent(
         self, agent: Agent, tick: int, visible: list[uuid.UUID], unmet: list[uuid.UUID]
-    ) -> tuple[str, list[uuid.UUID], str, list[uuid.UUID], bool]:
+    ) -> tuple[str, list[uuid.UUID], dict[str, Any], str, list[uuid.UUID], bool, int]:
         tier: Literal[1, 2] = 2 if unmet else 1
 
         observation = PerceptionService.observe(agent, tick, other_agents_present=visible)
@@ -252,12 +337,87 @@ class MultiAgentTickScheduler:
             )
 
         if isinstance(result, Rejection):
-            return "idle", [], "double validator rejection; safe default", visible, False
+            return "idle", [], {}, "double validator rejection; safe default", visible, False, tier
 
         first_encounter = any(t in unmet for t in result.targets)
-        return result.action, result.targets, result.reasoning, visible, first_encounter
+        return result.action, result.targets, result.params, result.reasoning, visible, first_encounter, tier
+
+    async def _maybe_reflect(self, agent: Agent, tick: int) -> None:
+        """Reflection doesn't consume the tick's one action (About/spec.md
+        §5.3) — it runs alongside whatever the agent just did, not instead
+        of it (see `runtime/reflection.py`'s docstring for why this bypasses
+        the decision loop entirely)."""
+        if not await is_reflection_due(self.session, agent.id, agent.last_reflection_tick, tick):
+            return
+        await ReflectionService.reflect(
+            self.session,
+            self.provider,
+            self.rng,
+            agent.id,
+            self.bundles[agent.id],
+            agent.last_reflection_tick,
+            tick,
+            tick_to_datetime(tick),
+        )
+        agent.last_reflection_tick = tick
+
+    async def _maybe_compress(self, agent: Agent, tick: int) -> None:
+        await compress_if_over_cap(
+            self.session, self.provider, self.rng, agent.id, tick, tick_to_datetime(tick)
+        )
+
+    def _apply_goal_effects(
+        self, agent: Agent, action_name: str, params: dict[str, Any], tier: int, tick: int
+    ) -> None:
+        """`form_goal`/`abandon_goal` are actions the model itself chose
+        (About/spec.md §10's action table); `runtime/goals.py` just applies
+        them. Formation only takes effect on the Tier-2 tick spec.md §4.2
+        requires — a Tier-1 proposal of `form_goal` is accepted by the
+        Validator (tier isn't a containment gate, see `safety/validator.py`)
+        but has no effect here, same as any other action whose precondition
+        the model got wrong.
+        """
+        if action_name == "form_goal" and tier == 2:
+            description = str(params.get("description") or "an unspecified goal").strip()
+            try:
+                priority = max(0.0, min(1.0, float(params.get("priority", 0.5))))
+            except (TypeError, ValueError):
+                priority = 0.5
+            form_goal(agent, description, priority, tick, self.rng)
+        elif action_name == "abandon_goal":
+            try:
+                goal_id = uuid.UUID(str(params.get("goal_id")))
+            except (TypeError, ValueError):
+                return
+            abandon_goal(agent, goal_id)
+
+    async def _maybe_couple_goals(
+        self, agent: Agent, targets: list[uuid.UUID], tier: int, tick: int
+    ) -> None:
+        """Goal coupling (About/spec.md §4.2's adoption formula) is checked
+        against actual Tier-2 interaction targets rather than the whole
+        population every tick — Tier-2 ticks are already the rare,
+        expensive ones (About/config.py's `TieringConfig` targets ~3%), so
+        this stays bounded even at T5.1's 20-agent, 10,000-tick scale.
+        """
+        if tier != 2:
+            return
+        independence = self.bundles[agent.id].decision_weights.get("independence", 0.5)
+        for target_id in targets:
+            friend = self.agents_by_id.get(target_id)
+            if friend is None or not friend.goals:
+                continue
+            edge = await get_edge(self.session, self.world_id, agent.id, target_id)
+            if edge is None or edge.bond_state not in _COUPLING_ELIGIBLE_BOND_STATES:
+                continue
+            for goal in friend.goals:
+                maybe_adopt_goal(agent, goal, target_id, independence, edge.trust, tick, self.rng)
 
     async def run_tick(self, tick: int) -> list[EventRecord]:
+        self.exogenous_events_fired.extend(self.exogenous_scheduler.maybe_fire(tick))
+        await self._maybe_scan_factions(tick)
+        await self._maybe_run_maintenance(tick)
+
         if in_sleep_window(tick):
             # Sleeping agents are "unperceiving for duration" (About/spec.md
             # §10's `sleep` semantics) — no encounter detection, no edges
@@ -271,6 +431,9 @@ class MultiAgentTickScheduler:
                 )
                 agent.last_tick = tick
                 events.append(event)
+                prune_stale_goals(agent, tick)
+                await self._maybe_reflect(agent, tick)
+                await self._maybe_compress(agent, tick)
             return events
 
         visible_by_agent, newly_met = await self._materialise_new_encounters(tick)
@@ -281,7 +444,7 @@ class MultiAgentTickScheduler:
         )
 
         events = []
-        for agent, (action_name, targets, reasoning, visible, first_encounter) in zip(
+        for agent, (action_name, targets, params, reasoning, visible, first_encounter, tier) in zip(
             self.agents, decisions, strict=True
         ):
             witnesses = [v for v in visible if v not in targets]
@@ -298,9 +461,16 @@ class MultiAgentTickScheduler:
                 reasoning,
                 witnesses=witnesses,
                 first_encounter=first_encounter,
+                bundles=self.bundles,
+                params=params,
             )
             agent.last_tick = tick
             events.append(event)
+            self._apply_goal_effects(agent, action_name, params, tier, tick)
+            await self._maybe_couple_goals(agent, targets, tier, tick)
+            prune_stale_goals(agent, tick)
+            await self._maybe_reflect(agent, tick)
+            await self._maybe_compress(agent, tick)
         return events
 
     async def run(self, num_ticks: int, start_tick: int = 0) -> list[EventRecord]:

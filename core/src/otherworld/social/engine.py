@@ -60,6 +60,16 @@ async def get_edge(
     return edge_from_orm(row) if row else None
 
 
+async def get_all_edges(session: AsyncSession, world_id: uuid.UUID) -> list[RelationshipEdge]:
+    """The whole relationship graph for a world — About/social/factions.py's
+    periodic scan needs every edge at once, unlike everything else in this
+    module, which works one pair at a time."""
+    rows = (
+        await session.execute(select(RelationshipEdgeORM).where(RelationshipEdgeORM.world_id == world_id))
+    ).scalars().all()
+    return [edge_from_orm(row) for row in rows]
+
+
 async def get_or_create_edge(
     session: AsyncSession,
     world_id: uuid.UUID,
@@ -112,8 +122,33 @@ def apply_trust_delta(edge: RelationshipEdge, action: str) -> RelationshipEdge:
     return edge.model_copy(update={"trust": new_trust})
 
 
+def trust_normalised(trust: float) -> float:
+    """Maps trust's [-1, 1] range onto [0, 1] — several formulas (goal
+    adoption, About/spec.md §4.2; gossip strength, §8.1) treat trust as a
+    probability-like weight and would misbehave on the raw signed scale.
+    """
+    return (trust + 1.0) / 2.0
+
+
 def is_friend_eligible(edge: RelationshipEdge, max_shared_memory_importance: float) -> bool:
     return (
         edge.trust >= settings.relationships.friend_trust_threshold
         and max_shared_memory_importance >= settings.relationships.friend_shared_memory_importance
     )
+
+
+def apply_trust_decay(edge: RelationshipEdge, current_tick: int) -> RelationshipEdge:
+    """About/spec.md §6.3. Applied once per check when
+    `ticks_since_last_contact > decay_starts_after_ticks`; seeded edges
+    decay at half rate. Callers decide how often to check (About/plan.md M5
+    scope calls for a periodic scan, not every tick for every edge —
+    `social/maintenance.py`).
+    """
+    ticks_since_contact = current_tick - edge.last_contact_tick
+    if ticks_since_contact <= settings.relationships.decay_starts_after_ticks:
+        return edge
+
+    multiplier = settings.relationships.seeded_decay_multiplier if edge.seeded else 1.0
+    decay = settings.relationships.decay_per_tick * multiplier * ticks_since_contact
+    new_trust = max(-1.0, edge.trust - decay)
+    return edge.model_copy(update={"trust": new_trust})
