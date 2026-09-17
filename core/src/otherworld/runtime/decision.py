@@ -39,7 +39,9 @@ def _response_instruction() -> str:
         "Respond with JSON only, no other text, no markdown code fences: "
         '{"action": "<one of the actions listed below>", "targets": [], "params": {}, "reasoning": "<why>"}. '
         f"Valid actions, and only these: {actions}. "
-        'For "form_goal", set params to {"description": "<short goal>", "priority": <0-1>}. '
+        'For "form_goal", set params to {"description": "<short goal>", "priority": <0-1>, '
+        '"target_agent_id": "<id from visible agents, or null>", '
+        '"exclusive": <true if this goal competes with anyone else pursuing the same target agent>}. '
         'For "abandon_goal", set params to {"goal_id": "<id of a goal from your current goal stack>"}. '
         'For "confide" when sharing one of your beliefs (see the beliefs listed above, if any), set '
         'params to {"belief_id": "<id of the belief>", "about_agent_id": "<id it is about>"}.'

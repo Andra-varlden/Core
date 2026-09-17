@@ -39,6 +39,16 @@ class Goal(BaseModel):
     adopted_from_agent_id: uuid.UUID | None = None
     created_tick: int
     completed_tick: int | None = None
+    # About/spec.md §7.1's VALUE_CLASH ("two agents' goals are mutually
+    # exclusive") needs a structured signal goals otherwise don't carry —
+    # free-text descriptions have no principled "conflicts with" relation to
+    # detect. `target_agent_id` + `exclusive` is a deliberately minimal
+    # stand-in (the model self-reports it via `form_goal`'s params, About/
+    # runtime/decision.py): two agents each holding an active, `exclusive`
+    # goal about the same third party is treated as a value clash between
+    # them (`social/conflict.py`'s `detect_value_clash`).
+    target_agent_id: uuid.UUID | None = None
+    exclusive: bool = False
 
 
 class Agent(BaseModel):

@@ -40,6 +40,7 @@ from otherworld.runtime.resolver import Resolver
 from otherworld.runtime.retrieval import RetrievalService
 from otherworld.runtime.trace import TraceLog
 from otherworld.safety.validator import Validator
+from otherworld.social.conflict import compute_damping_factor, conflicts_per_agent_per_day
 from otherworld.social.engine import get_all_edges, get_edge, get_or_create_edge
 from otherworld.social.factions import (
     Clique,
@@ -49,8 +50,11 @@ from otherworld.social.factions import (
     find_exclusion_candidates,
     find_faction_pairs,
 )
+from otherworld.social.gossip import get_shareable_beliefs
 from otherworld.social.maintenance import run_maintenance_scan
 from otherworld.world.exogenous import ExogenousEvent, ExogenousEventScheduler
+from otherworld.world.map import WorldMap, generate_starter_map
+from otherworld.world.pathfinding import find_path
 from otherworld.world.proximity import agents_within_radius
 
 _COUPLING_ELIGIBLE_BOND_STATES = (BondState.FRIEND, BondState.CLOSE_BOND)
@@ -63,6 +67,14 @@ def in_sleep_window(tick: int) -> bool:
     minutes = (tick * settings.world.in_world_minutes_per_tick) % _MINUTES_PER_DAY
     hour = minutes // 60
     return hour < _SLEEP_WINDOW_END_HOUR
+
+
+def _parse_move_destination(params: dict[str, Any], world_map: WorldMap) -> tuple[int, int] | None:
+    try:
+        x, y = int(params.get("x")), int(params.get("y"))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return (x, y) if world_map.in_bounds((x, y)) else None
 
 
 class TickScheduler:
@@ -192,6 +204,7 @@ class MultiAgentTickScheduler:
         world_id: uuid.UUID,
         agents: list[Agent],
         bundles: dict[uuid.UUID, AgentBundle],
+        world_map: WorldMap | None = None,
     ) -> None:
         self.session = session
         self.provider = provider
@@ -200,6 +213,10 @@ class MultiAgentTickScheduler:
         self.agents = sorted(agents, key=lambda a: a.id)
         self.agents_by_id = {a.id: a for a in self.agents}
         self.bundles = bundles
+        self.world_map = world_map or generate_starter_map(
+            world_id, settings.world.width, settings.world.height
+        )
+        self.tier0_walk_count = 0
         self.trace_log = TraceLog()
         self.exogenous_scheduler = ExogenousEventScheduler(rng)
         self.exogenous_events_fired: list[ExogenousEvent] = []
@@ -209,6 +226,34 @@ class MultiAgentTickScheduler:
         self.exclusion_signals: list[ExclusionCandidate] = []
         self._exclusion_first_seen: dict[tuple[uuid.UUID, frozenset[uuid.UUID]], int] = {}
         self._last_maintenance_scan_tick: int | None = None
+        self._last_damping_check_tick: int | None = None
+        self.conflict_damping_factor: float = 1.0
+
+    async def _maybe_update_conflict_damping(self, tick: int) -> None:
+        """About/spec.md §7.6. Reuses the same periodic-whole-graph-scan
+        cadence as `_maybe_run_maintenance`/`_maybe_scan_factions` rather
+        than a per-tick query — the rate this throttles is a trend over a
+        window, not something that needs checking every tick.
+        """
+        due = (
+            self._last_damping_check_tick is None
+            or tick - self._last_damping_check_tick >= settings.conflict.damping_check_interval_ticks
+        )
+        if not due:
+            return
+        self._last_damping_check_tick = tick
+
+        window_ticks = settings.conflict.damping_check_interval_ticks
+        window_start = max(0, tick - window_ticks)
+        edges = await get_all_edges(self.session, self.world_id)
+        new_conflicts = sum(
+            1
+            for edge in edges
+            for record in edge.conflict_log
+            if window_start <= record.occurred_tick < tick
+        )
+        rate = conflicts_per_agent_per_day(new_conflicts, len(self.agents), window_ticks)
+        self.conflict_damping_factor = compute_damping_factor(rate)
 
     async def _maybe_run_maintenance(self, tick: int) -> None:
         """Trust decay, decay-driven demotion, Strained timeout/escalation,
@@ -224,7 +269,10 @@ class MultiAgentTickScheduler:
         if not due:
             return
         self._last_maintenance_scan_tick = tick
-        await run_maintenance_scan(self.session, self.world_id, self.bundles, self.rng, tick)
+        await run_maintenance_scan(
+            self.session, self.world_id, self.agents, self.bundles, self.rng, tick,
+            damping_factor=self.conflict_damping_factor,
+        )
 
     async def _maybe_scan_factions(self, tick: int) -> None:
         """About/spec.md §8.3, recomputed every `factions.scan_interval_ticks`
@@ -323,11 +371,25 @@ class MultiAgentTickScheduler:
     async def _decide_for_agent(
         self, agent: Agent, tick: int, visible: list[uuid.UUID], unmet: list[uuid.UUID]
     ) -> tuple[str, list[uuid.UUID], dict[str, Any], str, list[uuid.UUID], bool, int]:
+        # Tier 0: an agent already walking a stored path just takes its next
+        # step, About/architecture.md §12 ("Tier 0 never touches this
+        # interface") — but only when nothing more pressing (a first
+        # encounter) needs an actual decision this tick.
+        if agent.current_path and not unmet:
+            self.tier0_walk_count += 1
+            step = agent.current_path[0]
+            agent.current_path = agent.current_path[1:]
+            agent.position = agent.position.model_copy(update={"x": step[0], "y": step[1]})
+            return "move_to", [], {}, "walking a stored path (tier 0)", visible, False, 0
+
         tier: Literal[1, 2] = 2 if unmet else 1
 
         observation = PerceptionService.observe(agent, tick, other_agents_present=visible)
         query_embedding = await self.provider.embed(f"tick {tick} ambient decision")
         retrieved = await RetrievalService.retrieve(self.session, agent.id, query_embedding, tick, tier=tier)
+        shareable = await get_shareable_beliefs(self.session, agent.id)
+        retrieved_ids = {m.id for m in retrieved}
+        retrieved = [*retrieved, *(b for b in shareable if b.id not in retrieved_ids)]
 
         result = await self._propose_and_validate(agent, observation, retrieved, tick, tier, unmet)
         if isinstance(result, Rejection):
@@ -339,8 +401,34 @@ class MultiAgentTickScheduler:
         if isinstance(result, Rejection):
             return "idle", [], {}, "double validator rejection; safe default", visible, False, tier
 
-        first_encounter = any(t in unmet for t in result.targets)
-        return result.action, result.targets, result.params, result.reasoning, visible, first_encounter, tier
+        action_name, targets = result.action, result.targets
+        params, reasoning = result.params, result.reasoning
+        if action_name == "move_to":
+            reasoning = self._start_walking(agent, params, reasoning)
+
+        first_encounter = any(t in unmet for t in targets)
+        return action_name, targets, params, reasoning, visible, first_encounter, tier
+
+    def _start_walking(self, agent: Agent, params: dict[str, Any], reasoning: str) -> str:
+        """A freshly-chosen `move_to` (About/spec.md §10: "consumed one tile
+        per tick") computes its path and takes the first step immediately,
+        rather than spending this whole tick just planning — later ticks
+        then walk it via the Tier-0 shortcut above until it's exhausted.
+        Unreachable/invalid destinations are handled, not rejected (About/
+        plan.md T5.12): the agent simply doesn't move this tick.
+        """
+        dest = _parse_move_destination(params, self.world_map)
+        if dest is None:
+            return f"{reasoning} (no valid destination given)"
+        path = find_path(self.world_map, (agent.position.x, agent.position.y), dest)
+        if path is None:
+            return f"{reasoning} (destination unreachable)"
+        if not path:
+            return f"{reasoning} (already at destination)"
+        agent.current_path = path[1:]
+        step = path[0]
+        agent.position = agent.position.model_copy(update={"x": step[0], "y": step[1]})
+        return reasoning
 
     async def _maybe_reflect(self, agent: Agent, tick: int) -> None:
         """Reflection doesn't consume the tick's one action (About/spec.md
@@ -383,7 +471,12 @@ class MultiAgentTickScheduler:
                 priority = max(0.0, min(1.0, float(params.get("priority", 0.5))))
             except (TypeError, ValueError):
                 priority = 0.5
-            form_goal(agent, description, priority, tick, self.rng)
+            try:
+                target_agent_id = uuid.UUID(str(params.get("target_agent_id")))
+            except (TypeError, ValueError):
+                target_agent_id = None
+            exclusive = bool(params.get("exclusive", False)) and target_agent_id is not None
+            form_goal(agent, description, priority, tick, self.rng, target_agent_id, exclusive)
         elif action_name == "abandon_goal":
             try:
                 goal_id = uuid.UUID(str(params.get("goal_id")))
@@ -416,6 +509,7 @@ class MultiAgentTickScheduler:
     async def run_tick(self, tick: int) -> list[EventRecord]:
         self.exogenous_events_fired.extend(self.exogenous_scheduler.maybe_fire(tick))
         await self._maybe_scan_factions(tick)
+        await self._maybe_update_conflict_damping(tick)
         await self._maybe_run_maintenance(tick)
 
         if in_sleep_window(tick):
@@ -463,6 +557,7 @@ class MultiAgentTickScheduler:
                 first_encounter=first_encounter,
                 bundles=self.bundles,
                 params=params,
+                damping_factor=self.conflict_damping_factor,
             )
             agent.last_tick = tick
             events.append(event)

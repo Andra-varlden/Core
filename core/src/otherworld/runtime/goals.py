@@ -33,11 +33,20 @@ def has_capacity(agent: Agent) -> bool:
     return len(agent.goals) < settings.goals.max_concurrent
 
 
-def form_goal(agent: Agent, description: str, priority: float, tick: int, rng: random.Random) -> None:
+def form_goal(
+    agent: Agent,
+    description: str,
+    priority: float,
+    tick: int,
+    rng: random.Random,
+    target_agent_id: uuid.UUID | None = None,
+    exclusive: bool = False,
+) -> None:
     if not has_capacity(agent):
         return
     goal = Goal(
-        id=seeded_uuid(rng), description=description, priority=priority, origin="self", created_tick=tick
+        id=seeded_uuid(rng), description=description, priority=priority, origin="self", created_tick=tick,
+        target_agent_id=target_agent_id, exclusive=exclusive,
     )
     agent.goals = [*agent.goals, goal]
 

@@ -60,6 +60,8 @@ class ConflictConfig(BaseModel):
     scar_multiplier_cap: float = 2.0
     cooling_period_ticks: int = 200
     global_damping_threshold_per_agent_day: float = 0.8
+    damping_check_interval_ticks: int = 200
+    damping_factor_floor: float = 0.1
 
 
 class GossipConfig(BaseModel):

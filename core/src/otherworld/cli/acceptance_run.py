@@ -306,13 +306,13 @@ async def _main(
 
         elapsed = time.perf_counter() - start
         # `TraceLog` only records Tier 1/2 decisions (About/runtime/trace.py
-        # — Tier 0 never touches `DecisionEngine`); the sleep window is this
-        # run's only Tier-0 behaviour (`move_to` path-consumption isn't
-        # wired this milestone, About/plan.md's M5 status), so Tier 0's
-        # count is every agent-tick during it, computed directly rather
-        # than from a trace that was never written for them.
+        # — Tier 0 never touches `DecisionEngine`); the sleep window and
+        # walking a stored path (`scheduler.tier0_walk_count`, About/plan.md
+        # M5's real-movement wiring) are this run's Tier-0 behaviours, so
+        # Tier 0's count is computed directly rather than from a trace that
+        # was never written for them.
         tier0_ticks = sum(1 for t in range(start_tick, start_tick + ticks) if in_sleep_window(t))
-        tier_counts[0] = tier0_ticks * len(agents)
+        tier_counts[0] = tier0_ticks * len(agents) + scheduler.tier0_walk_count
         total_decisions = sum(tier_counts.values())
         tier_shares = {
             tier: (count / total_decisions if total_decisions else 0.0) for tier, count in tier_counts.items()
@@ -324,11 +324,16 @@ async def _main(
         print(f"Wall clock: {elapsed:.1f}s ({ticks / elapsed:.2f} ticks/s)")
         print(f"Total events: {total_events}")
         print(f"Tier shares (of {total_decisions} decisions): {tier_shares} (T5.13 target: 0>=0.80, 2<=0.05)")
+        print(f"Tier-0 walking steps: {scheduler.tier0_walk_count}")
         print(f"Exogenous events fired: {len(scheduler.exogenous_events_fired)}")
         print(
             f"Cliques at last scan: {len(scheduler.cliques)}, "
             f"faction pairs: {len(scheduler.faction_pairs)}, "
             f"exclusion signals: {len(scheduler.exclusion_signals)}"
+        )
+        print(
+            f"Conflict damping factor at end of run: {scheduler.conflict_damping_factor:.3f} "
+            "(T5.5; 1.0 = no damping)"
         )
         print()
         print(await _report(session, world_id))

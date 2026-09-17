@@ -12,13 +12,12 @@ than being tied to a single action:
   M5's initial pass but never actually invoked anywhere until this module,
   which is exactly why About/plan.md's T5.1 run never observed a Broken
   transition: nothing was checking for it).
-- NEGLECT and CONTAGION (spec.md §7.1), the two scan-tied conflict
-  triggers that have no single action to hang off of.
-
-VALUE_CLASH (goals mutually exclusive) is NOT implemented here: goals are
-free-text descriptions (About/runtime/goals.py) with no structured
-representation of what they conflict *with*, so "mutually exclusive" has no
-principled detector to build yet. A documented gap, not a silent one.
+- NEGLECT, CONTAGION and VALUE_CLASH (spec.md §7.1), the three scan-tied
+  conflict triggers that have no single action to hang off of. VALUE_CLASH
+  is detected against the minimal structured stand-in `Goal.target_agent_id`/
+  `exclusive` carry (`social/conflict.py`'s `detect_value_clash` docstring
+  explains why goals otherwise have no principled "conflicts with" relation
+  to check against free text).
 """
 
 from __future__ import annotations
@@ -28,6 +27,7 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from otherworld.models.agent import Agent
 from otherworld.models.relationship import BondState, ConflictTrigger, RelationshipEdge
 from otherworld.persona.compiler import AgentBundle
 from otherworld.runtime.determinism import seeded_uuid
@@ -37,20 +37,24 @@ from otherworld.social.conflict import (
     check_strained_timeout,
     contagion_susceptibility,
     detect_neglect,
+    detect_value_clash,
     open_conflict,
 )
 from otherworld.social.engine import apply_trust_decay, get_all_edges, ordered_pair, save_edge
 from otherworld.social.state_machine import apply_decay
 
 _BONDED_FOR_CONTAGION = (BondState.FRIEND, BondState.CLOSE_BOND)
+_BONDED_FOR_VALUE_CLASH = (BondState.ACQUAINTANCE, BondState.FRIEND, BondState.CLOSE_BOND)
 
 
 async def run_maintenance_scan(
     session: AsyncSession,
     world_id: uuid.UUID,
+    agents: list[Agent],
     bundles: dict[uuid.UUID, AgentBundle],
     rng: random.Random,
     tick: int,
+    damping_factor: float = 1.0,
 ) -> None:
     edges = await get_all_edges(session, world_id)
 
@@ -60,14 +64,48 @@ async def run_maintenance_scan(
         updated = check_strained_timeout(updated, tick)
         updated = check_feud_escalation(updated)
         if detect_neglect(updated, tick):
+            damped = damping_factor < 1.0 and rng.random() >= damping_factor
             updated = open_conflict(
-                updated, ConflictTrigger.NEGLECT, theme="neglect", tick=tick, rng_id=seeded_uuid(rng)
+                updated, ConflictTrigger.NEGLECT, theme="neglect", tick=tick, rng_id=seeded_uuid(rng),
+                damped=damped,
             )
         if updated != edge:
             await save_edge(session, updated)
             edge = updated
 
-    await _apply_contagion(session, edges, bundles, rng, tick)
+    await _apply_contagion(session, edges, bundles, rng, tick, damping_factor)
+    await _apply_value_clash(session, edges, agents, rng, tick, damping_factor)
+
+
+async def _apply_value_clash(
+    session: AsyncSession,
+    edges: list[RelationshipEdge],
+    agents: list[Agent],
+    rng: random.Random,
+    tick: int,
+    damping_factor: float = 1.0,
+) -> None:
+    """About/spec.md §7.1: fires between any bonded pair (Acquaintance+, not
+    just Friend+ — a clash doesn't require closeness, unlike CONTAGION)
+    whose active goals target the same third party exclusively.
+    """
+    goals_by_agent = {agent.id: agent.goals for agent in agents}
+    for edge in edges:
+        if edge.bond_state not in _BONDED_FOR_VALUE_CLASH:
+            continue
+        goals_a = goals_by_agent.get(edge.agent_a_id, [])
+        goals_b = goals_by_agent.get(edge.agent_b_id, [])
+        if not goals_a or not goals_b:
+            continue
+        if not detect_value_clash(edge.agent_a_id, goals_a, edge.agent_b_id, goals_b):
+            continue
+        damped = damping_factor < 1.0 and rng.random() >= damping_factor
+        updated = open_conflict(
+            edge, ConflictTrigger.VALUE_CLASH, theme="value_clash", tick=tick, rng_id=seeded_uuid(rng),
+            damped=damped,
+        )
+        if updated != edge:
+            await save_edge(session, updated)
 
 
 async def _apply_contagion(
@@ -76,6 +114,7 @@ async def _apply_contagion(
     bundles: dict[uuid.UUID, AgentBundle],
     rng: random.Random,
     tick: int,
+    damping_factor: float = 1.0,
 ) -> None:
     """About/spec.md §7.1: "A Friend+ edge exists to an agent in a Feud with
     the target." For every agent A with a Friend+ edge to B, where B is
@@ -118,6 +157,7 @@ async def _apply_contagion(
                 if target_edge is None:
                     continue
                 base_severity = TRIGGER_BASE_SEVERITY[ConflictTrigger.CONTAGION] * susceptibility
+                damped = damping_factor < 1.0 and rng.random() >= damping_factor
                 updated = open_conflict(
                     target_edge,
                     ConflictTrigger.CONTAGION,
@@ -125,6 +165,7 @@ async def _apply_contagion(
                     tick=tick,
                     rng_id=seeded_uuid(rng),
                     base_severity_override=base_severity,
+                    damped=damped,
                 )
                 if updated != target_edge:
                     await save_edge(session, updated)

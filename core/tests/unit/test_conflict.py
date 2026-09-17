@@ -4,14 +4,18 @@ terminal transitions, and the scar effect.
 
 import uuid
 
+from otherworld.models.agent import Goal
 from otherworld.models.relationship import BondState, ConflictTrigger, RelationshipEdge
 from otherworld.social.conflict import (
     TRIGGER_BASE_SEVERITY,
     check_feud_escalation,
     check_strained_timeout,
+    compute_damping_factor,
+    conflicts_per_agent_per_day,
     contagion_susceptibility,
     detect_action_trigger,
     detect_neglect,
+    detect_value_clash,
     effective_severity,
     is_in_cooling_period,
     matching_scar_count,
@@ -161,3 +165,54 @@ def test_detect_neglect_requires_high_trust_and_staleness():
 def test_contagion_susceptibility_matches_spec_formula():
     assert contagion_susceptibility(loyalty=0.8, independence=0.3) == 0.8 * 0.7
     assert contagion_susceptibility(loyalty=0.5, independence=1.0) == 0.0
+
+
+def test_open_conflict_damped_is_a_noop_even_on_a_bonded_edge():
+    edge = _edge(bond_state=BondState.FRIEND)
+    updated = open_conflict(
+        edge, ConflictTrigger.BETRAYAL, theme="money", tick=10, rng_id=uuid.uuid4(), damped=True
+    )
+    assert updated == edge
+
+
+def test_conflicts_per_agent_per_day_matches_spec_formula():
+    # 144 ticks/agent-day at the default 10 in-world minutes/tick.
+    assert conflicts_per_agent_per_day(10, 20, 144) == 0.5
+    assert conflicts_per_agent_per_day(0, 20, 144) == 0.0
+    assert conflicts_per_agent_per_day(10, 0, 144) == 0.0  # no agents, no rate
+
+
+def test_compute_damping_factor_matches_spec_threshold():
+    assert compute_damping_factor(0.5) == 1.0  # under 0.8 threshold, no damping
+    assert compute_damping_factor(0.8) == 1.0  # exactly at threshold, no damping
+    assert compute_damping_factor(1.6) == 0.5  # 0.8 / 1.6
+    assert compute_damping_factor(100.0) == 0.1  # floored, never fully silenced
+
+
+def test_detect_value_clash_requires_exclusive_shared_third_party_target():
+    a_id, b_id, c_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    clash_goal_a = Goal(
+        id=uuid.uuid4(), description="win C", priority=0.5, origin="self",
+        created_tick=0, target_agent_id=c_id, exclusive=True,
+    )
+    clash_goal_b = Goal(
+        id=uuid.uuid4(), description="win C too", priority=0.5, origin="self",
+        created_tick=0, target_agent_id=c_id, exclusive=True,
+    )
+    assert detect_value_clash(a_id, [clash_goal_a], b_id, [clash_goal_b]) is True
+
+    non_exclusive = clash_goal_b.model_copy(update={"exclusive": False})
+    assert detect_value_clash(a_id, [clash_goal_a], b_id, [non_exclusive]) is False
+
+    different_target = Goal(
+        id=uuid.uuid4(), description="win someone else", priority=0.5, origin="self",
+        created_tick=0, target_agent_id=uuid.uuid4(), exclusive=True,
+    )
+    assert detect_value_clash(a_id, [clash_goal_a], b_id, [different_target]) is False
+
+    # A "shared target" that's actually one of the pair themselves is a
+    # direct relationship, not a three-way clash — excluded even though the
+    # target_agent_id sets intersect.
+    both_targeting_b = clash_goal_a.model_copy(update={"target_agent_id": b_id})
+    also_targeting_b = clash_goal_b.model_copy(update={"target_agent_id": b_id})
+    assert detect_value_clash(a_id, [both_targeting_b], b_id, [also_targeting_b]) is False

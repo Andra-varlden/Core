@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from otherworld.config import settings
 from otherworld.llm.protocol import LLMProvider, Prompt
-from otherworld.models.memory import MemoryKind, MemoryRecord, MemoryRecordORM, memory_to_orm
+from otherworld.models.memory import MemoryKind, MemoryRecord, MemoryRecordORM, memory_from_orm, memory_to_orm
 from otherworld.runtime.determinism import seeded_uuid
 from otherworld.runtime.json_util import extract_json_object
 from otherworld.social.engine import trust_normalised
@@ -162,6 +162,37 @@ class GossipService:
             valence=source_belief.valence,
             created_at=created_at,
         )
+
+
+async def get_shareable_beliefs(
+    session: AsyncSession, agent_id: uuid.UUID, limit: int = 5
+) -> list[MemoryRecord]:
+    """About/spec.md §8.1's gossip-eligible beliefs, queried directly rather
+    than relying on them surviving `RetrievalService`'s general Tier-1/2
+    candidate pool — About/plan.md T5.10/T5.11's actual root cause: reflection
+    forms real about-a-third-party beliefs correctly, but a belief's
+    importance almost never outscores a same-tick high-importance episodic
+    event (a `betray` at 0.95 vs. spec.md §5.2's recency-heavy formula), so
+    the general pool starves `confide` of anything real to share — 36,000+
+    beliefs formed in About/plan.md's acceptance runs, `hop_count` never once
+    above 0. A belief always carries exactly one subject (`runtime/
+    reflection.py`), so "about someone else" is `subjects` not containing
+    `agent_id` (GIN-indexed, `models/memory.py`).
+    """
+    rows = (
+        await session.execute(
+            select(MemoryRecordORM)
+            .where(
+                MemoryRecordORM.agent_id == agent_id,
+                MemoryRecordORM.kind == MemoryKind.BELIEF.value,
+                MemoryRecordORM.importance >= settings.gossip.min_importance_to_propagate,
+                ~MemoryRecordORM.subjects.contains([agent_id]),
+            )
+            .order_by(MemoryRecordORM.importance.desc(), MemoryRecordORM.tick.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+    return [memory_from_orm(row) for row in rows]
 
 
 async def save_propagated_belief(session: AsyncSession, belief: MemoryRecord) -> None:

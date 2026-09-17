@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 import pytest
 
 from otherworld.config import settings
+from otherworld.models.agent import Agent, AgentStatus, Goal, Position
 from otherworld.models.persona import PersonaObject, TraitVector, VoiceProfile
 from otherworld.models.relationship import BondState, ConflictTrigger
 from otherworld.persona.compiler import Compiler
@@ -43,7 +44,7 @@ async def test_scan_decays_trust_and_demotes_a_stale_friend_edge(db_session):
     edge = edge.model_copy(update={"bond_state": BondState.FRIEND, "trust": 0.26, "last_contact_tick": 0})
     await save_edge(db_session, edge)
 
-    await run_maintenance_scan(db_session, world_id, {}, random.Random(1), tick=2000)
+    await run_maintenance_scan(db_session, world_id, [], {}, random.Random(1), tick=2000)
 
     updated = await get_edge(db_session, world_id, A_ID, B_ID)
     assert updated is not None
@@ -60,7 +61,7 @@ async def test_scan_times_out_a_strained_edge_to_broken(db_session):
     await save_edge(db_session, edge)
 
     await run_maintenance_scan(
-        db_session, world_id, {}, random.Random(1),
+        db_session, world_id, [], {}, random.Random(1),
         tick=settings.conflict.strained_to_broken_ticks + 1,
     )
 
@@ -77,7 +78,7 @@ async def test_scan_escalates_a_strained_edge_to_feud_on_trust_collapse(db_sessi
     edge = open_conflict(edge, ConflictTrigger.BETRAYAL, theme="money", tick=0, rng_id=uuid.uuid4())
     await save_edge(db_session, edge)
 
-    await run_maintenance_scan(db_session, world_id, {}, random.Random(1), tick=10)
+    await run_maintenance_scan(db_session, world_id, [], {}, random.Random(1), tick=10)
 
     updated = await get_edge(db_session, world_id, A_ID, B_ID)
     assert updated is not None
@@ -93,7 +94,7 @@ async def test_scan_opens_a_neglect_trigger_on_a_stale_high_trust_edge(db_sessio
     await save_edge(db_session, edge)
 
     await run_maintenance_scan(
-        db_session, world_id, {}, random.Random(1), tick=settings.conflict.neglect_ticks + 1
+        db_session, world_id, [], {}, random.Random(1), tick=settings.conflict.neglect_ticks + 1
     )
 
     updated = await get_edge(db_session, world_id, A_ID, B_ID)
@@ -109,7 +110,7 @@ async def test_scan_does_not_open_neglect_on_a_fresh_edge(db_session):
     edge = edge.model_copy(update={"bond_state": BondState.FRIEND, "trust": 0.5, "last_contact_tick": 0})
     await save_edge(db_session, edge)
 
-    await run_maintenance_scan(db_session, world_id, {}, random.Random(1), tick=10)
+    await run_maintenance_scan(db_session, world_id, [], {}, random.Random(1), tick=10)
 
     updated = await get_edge(db_session, world_id, A_ID, B_ID)
     assert updated is not None
@@ -138,7 +139,7 @@ async def test_scan_applies_contagion_from_a_feuding_friend(db_session):
     # High loyalty, low independence => high contagion_susceptibility.
     bundles = {A_ID: _bundle(loyalty=0.9, independence=0.1)}
 
-    await run_maintenance_scan(db_session, world_id, bundles, random.Random(1), tick=10)
+    await run_maintenance_scan(db_session, world_id, [], bundles, random.Random(1), tick=10)
 
     updated_ac = await get_edge(db_session, world_id, A_ID, C_ID)
     assert updated_ac is not None
@@ -165,8 +166,78 @@ async def test_scan_skips_contagion_for_a_highly_independent_agent(db_session):
     # independence=1.0 => contagion_susceptibility is exactly 0.
     bundles = {A_ID: _bundle(loyalty=0.9, independence=1.0)}
 
-    await run_maintenance_scan(db_session, world_id, bundles, random.Random(1), tick=10)
+    await run_maintenance_scan(db_session, world_id, [], bundles, random.Random(1), tick=10)
 
     updated_ac = await get_edge(db_session, world_id, A_ID, C_ID)
     assert updated_ac is not None
     assert updated_ac.bond_state == BondState.ACQUAINTANCE
+
+
+def _agent(agent_id, goals=()) -> Agent:
+    return Agent(
+        id=agent_id, owner_id=uuid.uuid4(), persona_version=1, world_id=uuid.uuid4(),
+        display_name=str(agent_id), status=AgentStatus.ACTIVE,
+        position=Position(x=0, y=0, facing="s"), goals=list(goals), created_at=NOW,
+    )
+
+
+def _exclusive_goal(target_id) -> Goal:
+    return Goal(
+        id=uuid.uuid4(), description="win them over", priority=0.5, origin="self",
+        created_tick=0, target_agent_id=target_id, exclusive=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_scan_opens_a_value_clash_when_two_bonded_agents_target_the_same_third_party(db_session):
+    world_id = uuid.uuid4()
+    edge, _ = await get_or_create_edge(db_session, world_id, A_ID, B_ID, uuid.uuid4(), tick=0)
+    edge = edge.model_copy(update={"bond_state": BondState.ACQUAINTANCE, "trust": 0.2})
+    await save_edge(db_session, edge)
+
+    agents = [_agent(A_ID, [_exclusive_goal(C_ID)]), _agent(B_ID, [_exclusive_goal(C_ID)])]
+
+    await run_maintenance_scan(db_session, world_id, agents, {}, random.Random(1), tick=10)
+
+    updated = await get_edge(db_session, world_id, A_ID, B_ID)
+    assert updated is not None
+    assert updated.bond_state == BondState.STRAINED
+    assert updated.conflict_log[0].trigger == ConflictTrigger.VALUE_CLASH
+
+
+@pytest.mark.asyncio
+async def test_scan_does_not_open_value_clash_for_non_exclusive_or_different_targets(db_session):
+    world_id = uuid.uuid4()
+    edge, _ = await get_or_create_edge(db_session, world_id, A_ID, B_ID, uuid.uuid4(), tick=0)
+    edge = edge.model_copy(update={"bond_state": BondState.ACQUAINTANCE, "trust": 0.2})
+    await save_edge(db_session, edge)
+
+    non_exclusive = Goal(
+        id=uuid.uuid4(), description="be near them", priority=0.5, origin="self",
+        created_tick=0, target_agent_id=C_ID, exclusive=False,
+    )
+    agents = [_agent(A_ID, [_exclusive_goal(C_ID)]), _agent(B_ID, [non_exclusive])]
+
+    await run_maintenance_scan(db_session, world_id, agents, {}, random.Random(1), tick=10)
+
+    updated = await get_edge(db_session, world_id, A_ID, B_ID)
+    assert updated is not None
+    assert updated.bond_state == BondState.ACQUAINTANCE
+
+
+@pytest.mark.asyncio
+async def test_scan_damping_factor_of_zero_suppresses_a_new_trigger(db_session):
+    world_id = uuid.uuid4()
+    edge, _ = await get_or_create_edge(db_session, world_id, A_ID, B_ID, uuid.uuid4(), tick=0)
+    edge = edge.model_copy(update={"bond_state": BondState.FRIEND, "trust": 0.9, "last_contact_tick": 0})
+    await save_edge(db_session, edge)
+
+    await run_maintenance_scan(
+        db_session, world_id, [], {}, random.Random(1), tick=settings.conflict.neglect_ticks + 1,
+        damping_factor=0.0,
+    )
+
+    updated = await get_edge(db_session, world_id, A_ID, B_ID)
+    assert updated is not None
+    assert updated.bond_state == BondState.FRIEND
+    assert updated.conflict_log == []

@@ -41,8 +41,9 @@ _ACTION_WEIGHTS: tuple[tuple[str, int], ...] = (
     ("greet", 14), ("speak_to", 14), ("compliment", 10), ("ignore", 5),
     ("criticise", 6), ("reject", 4), ("betray", 3), ("take", 4),
     ("apologise", 7), ("forgive", 7), ("give", 4), ("request", 3),
-    ("trade", 2), ("idle", 5),
+    ("trade", 2), ("idle", 5), ("move_to", 16),
 )
+_NO_TARGET_ACTIONS = ("idle", "gather", "move_to")
 _TOTAL_WEIGHT = sum(w for _, w in _ACTION_WEIGHTS)
 _GOAL_ROLL_MODULUS = 23  # ~1-in-23 ordinary ticks attempts a goal action
 _CONFIDE_ROLL_MODULUS = 5  # ~1-in-5 ticks with a shareable belief actually shares it
@@ -110,9 +111,26 @@ class ScenarioMockProvider:
         # Occasionally attempt a goal action instead of a social one.
         if digest_int % _GOAL_ROLL_MODULUS == 0:
             if _GOAL_NONE_MARKER in joined:
+                # About/spec.md §7.1's VALUE_CLASH needs two agents' goals to
+                # target the same third party exclusively — two different
+                # agents rolling `form_goal` only land on the same target by
+                # chance if that target is chosen the same way regardless of
+                # whose prompt it's computed from. `min(visible_ids)` (the
+                # most broadly-visible/"prominent" agent locally, a stand-in
+                # for "who everyone's chasing") does that; `visible_ids[0]`
+                # (a per-agent, list-order-dependent pick) mostly didn't,
+                # which is why a real 20-agent run never observed a single
+                # VALUE_CLASH despite the mechanism being correct in
+                # isolation (`tests/simulation/test_maintenance.py`).
+                # Exclusive about half the time so it's a real chance, not a
+                # certainty, over a long run.
+                exclusive = digest_int % 2 == 0
                 return _completion(
                     model, joined, "form_goal", [],
-                    {"description": "pursue something new (scenario)", "priority": 0.6},
+                    {
+                        "description": "pursue something new (scenario)", "priority": 0.6,
+                        "target_agent_id": min(visible_ids), "exclusive": exclusive,
+                    },
                 )
             # Goals exist but we don't know their ids from this prompt
             # section alone without a second regex; skip abandon_goal here
@@ -131,5 +149,8 @@ class ScenarioMockProvider:
                 )
 
         action = _weighted_choice(digest_int // max(len(visible_ids), 1))
-        targets = [] if action in ("idle", "gather") else [target]
-        return _completion(model, joined, action, targets, {})
+        targets = [] if action in _NO_TARGET_ACTIONS else [target]
+        params: dict[str, object] = (
+            {"x": digest_int % 60, "y": (digest_int // 60) % 60} if action == "move_to" else {}
+        )
+        return _completion(model, joined, action, targets, params)

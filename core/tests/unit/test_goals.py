@@ -52,6 +52,17 @@ def test_form_goal_respects_max_concurrent():
     assert len(agent.goals) == 3
 
 
+def test_form_goal_carries_the_value_clash_target_and_exclusive_flag():
+    agent = _agent()
+    target_id = uuid.uuid4()
+    form_goal(
+        agent, "win them over", 0.6, tick=10, rng=random.Random(1),
+        target_agent_id=target_id, exclusive=True,
+    )
+    assert agent.goals[0].target_agent_id == target_id
+    assert agent.goals[0].exclusive is True
+
+
 def test_abandon_goal_removes_by_id():
     g1, g2 = _goal(), _goal()
     agent = _agent(goals=[g1, g2])

@@ -17,6 +17,7 @@ import random
 import uuid
 
 from otherworld.config import settings
+from otherworld.models.agent import Goal
 from otherworld.models.relationship import BondState, ConflictRecord, ConflictTrigger, RelationshipEdge
 from otherworld.runtime.determinism import seeded_uuid
 
@@ -79,6 +80,7 @@ def open_conflict(
     tick: int,
     rng_id: uuid.UUID,
     base_severity_override: float | None = None,
+    damped: bool = False,
 ) -> RelationshipEdge:
     """Fires a trigger: opens a ConflictRecord (a permanent scar once
     resolved) and moves any bonded edge to Strained. Does nothing if the
@@ -96,8 +98,14 @@ def open_conflict(
     susceptibility", which depends on the *receiving* agent's persona, not
     the edge) — `social/maintenance.py` computes that scaled value and
     passes it through here instead of `TRIGGER_BASE_SEVERITY[trigger]`.
+
+    `damped`: About/spec.md §7.6's global conflict damping. Callers roll
+    against the world's current damping factor themselves (this stays a
+    pure function of its inputs, no RNG of its own) and pass `damped=True`
+    to suppress what would otherwise be a new trigger, exactly as if
+    nothing happened.
     """
-    if edge.bond_state in _ALREADY_AT_OR_BELOW_STRAINED or is_in_cooling_period(edge, tick):
+    if damped or edge.bond_state in _ALREADY_AT_OR_BELOW_STRAINED or is_in_cooling_period(edge, tick):
         return edge
 
     scars = matching_scar_count(edge, theme)
@@ -183,6 +191,7 @@ def apply_conflict_consequences(
     rng: random.Random,
     target_forgiveness: float = 0.5,
     target_grudge_retention: float = 0.5,
+    damping_factor: float = 1.0,
 ) -> RelationshipEdge:
     """Everything an action can do to an edge's conflict state in a single
     tick, About/spec.md §7.3's in-conflict action outcomes table:
@@ -194,6 +203,10 @@ def apply_conflict_consequences(
     promotion. Broken -> Acquaintance reconciliation is a separate rung
     (`social/state_machine.py`'s `attempt_reconciliation`), not this
     function's concern.
+
+    `damping_factor`: About/spec.md §7.6, only applied to a genuinely fresh
+    trigger (the final branch below) — an already-open conflict's own
+    escalation/repair outcomes aren't what damping is supposed to throttle.
     """
     if edge.bond_state == BondState.STRAINED:
         if action in _ESCALATING_ACTIONS:
@@ -216,7 +229,10 @@ def apply_conflict_consequences(
 
     trigger = detect_action_trigger(action, witnessed)
     if trigger is not None:
-        return open_conflict(edge, trigger, theme=trigger.value, tick=tick, rng_id=seeded_uuid(rng))
+        damped = damping_factor < 1.0 and rng.random() >= damping_factor
+        return open_conflict(
+            edge, trigger, theme=trigger.value, tick=tick, rng_id=seeded_uuid(rng), damped=damped
+        )
     return edge
 
 
@@ -232,10 +248,58 @@ def detect_neglect(edge: RelationshipEdge, current_tick: int) -> bool:
     return is_high_trust and (current_tick - edge.last_contact_tick) >= settings.conflict.neglect_ticks
 
 
+def detect_value_clash(
+    agent_a_id: uuid.UUID, goals_a: list[Goal], agent_b_id: uuid.UUID, goals_b: list[Goal]
+) -> bool:
+    """About/spec.md §7.1: "Two agents' goals are mutually exclusive AND both
+    persist." Since goals are free text with no general "conflicts with"
+    relation to compute, this checks the minimal structured stand-in
+    `Goal.target_agent_id`/`exclusive` carry (see `models/agent.py`): A and B
+    clash if each holds an active goal `exclusive`ly targeting the same third
+    party (and neither goal just targets the other agent in the pair — that's
+    a direct relationship, not a three-way competition). "Both persist" is
+    satisfied by construction: goals aren't pruned until `stale_ticks`
+    (`runtime/goals.py`), so a clash found at one periodic scan (`social/
+    maintenance.py`) reflects goals that have already been sitting there.
+    """
+    targets_a = {g.target_agent_id for g in goals_a if g.exclusive and g.target_agent_id is not None}
+    targets_b = {g.target_agent_id for g in goals_b if g.exclusive and g.target_agent_id is not None}
+    shared = targets_a & targets_b
+    return any(t != agent_a_id and t != agent_b_id for t in shared)
+
+
 def contagion_susceptibility(loyalty: float, independence: float) -> float:
     """About/spec.md §3's derived value, used to scale CONTAGION's base
     severity (§7.1) for the *receiving* agent."""
     return loyalty * (1 - independence)
+
+
+_MINUTES_PER_DAY = 24 * 60
+
+
+def conflicts_per_agent_per_day(new_conflicts_in_window: int, num_agents: int, window_ticks: int) -> float:
+    """About/spec.md §7.6's `conflicts_per_agent_per_day` rate, over a
+    trailing window rather than the world's whole lifetime — a global
+    average would smooth out exactly the bursts damping exists to catch.
+    """
+    if num_agents <= 0 or window_ticks <= 0:
+        return 0.0
+    ticks_per_agent_day = _MINUTES_PER_DAY / settings.world.in_world_minutes_per_tick
+    days_in_window = window_ticks / ticks_per_agent_day
+    return (new_conflicts_in_window / num_agents) / days_in_window
+
+
+def compute_damping_factor(rate_per_agent_day: float) -> float:
+    """About/spec.md §7.6: "If world-wide conflicts_per_agent_per_day exceeds
+    0.8, trigger probabilities are globally scaled down until it falls back
+    under." Floored rather than let it reach 0 — even a saturated world
+    should still occasionally produce a new conflict, not have the mechanic
+    switched off entirely.
+    """
+    threshold = settings.conflict.global_damping_threshold_per_agent_day
+    if rate_per_agent_day <= threshold:
+        return 1.0
+    return max(settings.conflict.damping_factor_floor, threshold / rate_per_agent_day)
 
 
 def check_feud_escalation(edge: RelationshipEdge) -> RelationshipEdge:

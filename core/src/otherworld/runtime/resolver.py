@@ -137,6 +137,7 @@ class Resolver:
         first_encounter: bool = False,
         bundles: dict[uuid.UUID, AgentBundle] | None = None,
         params: dict[str, Any] | None = None,
+        damping_factor: float = 1.0,
     ) -> EventRecord:
         """`first_encounter`: whether any of `targets` was unmet before this
         tick. Passed in by the caller rather than inferred from edge
@@ -190,6 +191,7 @@ class Resolver:
                     rng=rng,
                     target_forgiveness=weights.get("forgiveness", 0.5),
                     target_grudge_retention=weights.get("grudge_retention", 0.5),
+                    damping_factor=damping_factor,
                 )
 
             max_shared = await _max_shared_importance(session, edge.shared_memory_ids)
