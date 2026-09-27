@@ -56,9 +56,37 @@ async def test_reflection_due_after_interval_elapses(db_session):
 
 @pytest.mark.asyncio
 async def test_reflection_due_on_importance_sum_trigger(db_session):
-    for tick in range(1, 11):  # 10 x 0.9 = 9.0, clears the 8.0 threshold
-        await _seed_episodic_memory(db_session, tick=tick, importance=0.9)
-    assert await is_reflection_due(db_session, AGENT_ID, last_reflection_tick=0, tick=15)
+    """Threshold is 200.0 (retuned from the M4 real trial — see config.py's
+    `ReflectionConfig` docstring), well above what routine, always-witnessed
+    chatter accrues over a normal interval, so it only fires early for a
+    genuinely large importance sum — 210 maximum-importance memories here,
+    not the handful a busy tick or two would produce."""
+    from otherworld.models.memory import MemoryRecord, memory_to_orm
+
+    embedding = await MockLLMProvider().embed("high-importance")
+    for tick in range(1, 211):  # 210 x 1.0 = 210.0, clears the 200.0 threshold
+        record = MemoryRecord(
+            id=uuid.uuid4(), agent_id=AGENT_ID, kind=MemoryKind.EPISODIC,
+            content=f"Something happened at {tick}.",
+            embedding=embedding, importance=1.0, tick=tick, subjects=[AGENT_ID],
+            created_at=tick_to_datetime(tick),
+        )
+        db_session.add(memory_to_orm(record))
+    await db_session.flush()
+
+    assert await is_reflection_due(db_session, AGENT_ID, last_reflection_tick=0, tick=215)
+
+
+@pytest.mark.asyncio
+async def test_ordinary_witnessed_chatter_does_not_trigger_reflection_early(db_session):
+    """Regression guard for the M4 real-trial finding: real per-tick
+    importance accrual for a busy, always-witnessed agent measured ~0.89
+    (0.15 base + 0.10 witness bonus, repeated). 100 ticks of that (~89
+    total) must NOT cross the 200.0 threshold or fire before the interval.
+    """
+    for tick in range(1, 101):
+        await _seed_episodic_memory(db_session, tick=tick, importance=0.89)
+    assert not await is_reflection_due(db_session, AGENT_ID, last_reflection_tick=0, tick=100)
 
 
 @pytest.mark.asyncio

@@ -112,6 +112,49 @@ async def test_escalating_action_while_strained_leads_to_feud(db_session):
 
 
 @pytest.mark.asyncio
+async def test_a_fresh_conflict_trigger_gets_its_own_higher_importance_tier(db_session):
+    """spec.md §5.1: "Conflict trigger fired" = 0.85, a distinct tier above
+    the generic "Relationship state change" (0.75) — missing until the M4
+    real-trial post-mortem audit found it. `take`'s own base importance is
+    only 0.15, so 0.85 only shows up here if the conflict-trigger tier is
+    actually wired in."""
+    world_id = uuid.uuid4()
+    rng = random.Random(5)
+    await _make_friend_edge(db_session, world_id, rng)
+
+    event = await Resolver.resolve(
+        db_session, MockLLMProvider(), rng, world_id, ACTOR_ID, POSITION, tick=10,
+        action="take", targets=[TARGET_ID], reasoning="test", bundles={TARGET_ID: _bundle()},
+    )
+
+    edge = await get_edge(db_session, world_id, ACTOR_ID, TARGET_ID)
+    assert edge is not None and edge.bond_state == BondState.STRAINED
+    assert event.importance == pytest.approx(0.85)
+
+
+@pytest.mark.asyncio
+async def test_a_conflict_resolution_gets_its_own_higher_importance_tier(db_session):
+    """spec.md §5.1: "Conflict resolution (any)" = 0.90, higher even than a
+    fresh trigger — a repair matters more than the rupture it fixes."""
+    world_id = uuid.uuid4()
+    rng = random.Random(6)
+    await _make_friend_edge(db_session, world_id, rng)
+
+    await Resolver.resolve(
+        db_session, MockLLMProvider(), rng, world_id, ACTOR_ID, POSITION, tick=10,
+        action="betray", targets=[TARGET_ID], reasoning="test", bundles={TARGET_ID: _bundle()},
+    )
+    resolution_event = await Resolver.resolve(
+        db_session, MockLLMProvider(), rng, world_id, TARGET_ID, POSITION, tick=20,
+        action="forgive", targets=[ACTOR_ID], reasoning="test", bundles={ACTOR_ID: _bundle()},
+    )
+
+    edge = await get_edge(db_session, world_id, ACTOR_ID, TARGET_ID)
+    assert edge is not None and edge.conflict_log[0].resolution == "repaired"
+    assert resolution_event.importance == pytest.approx(0.90)
+
+
+@pytest.mark.asyncio
 async def test_apologise_repair_roll_uses_target_traits(db_session):
     """T5.8-adjacent — a highly forgiving, non-grudge-holding target repairs
     reliably; the roll reads the *target's* bundle, not the actor's."""

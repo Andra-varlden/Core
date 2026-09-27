@@ -10,12 +10,20 @@ any other vendor integration).
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
+from groq import RateLimitError
 
 from otherworld.llm.protocol import Prompt
-from otherworld.llm.providers.groq import TIER1_MODEL, TIER2_MODEL, GroqLLMProvider
+from otherworld.llm.providers.groq import _APP_LEVEL_MAX_RETRIES, TIER1_MODEL, TIER2_MODEL, GroqLLMProvider
+
+
+def _rate_limit_error() -> RateLimitError:
+    request = httpx.Request("POST", "https://api.groq.com/openai/v1/chat/completions")
+    response = httpx.Response(429, request=request)
+    return RateLimitError("rate limited", response=response, body=None)
 
 
 def _fake_response(text: str, prompt_tokens: int, completion_tokens: int) -> SimpleNamespace:
@@ -71,6 +79,35 @@ async def test_missing_usage_does_not_crash():
     completion = await provider.tier1(Prompt(system="s", messages=[]))
     assert completion.input_tokens == 0
     assert completion.output_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_retries_past_a_transient_rate_limit():
+    """About/plan.md M4's real 5-agent pilot run: a burst of concurrent
+    requests can all get rejected together even with the SDK's own retry
+    budget — the app-level retry (jittered, on top of the SDK's) should
+    absorb a transient 429 rather than crash the whole run."""
+    provider = GroqLLMProvider(api_key="test-key")
+    provider._client.chat.completions.create = AsyncMock(
+        side_effect=[_rate_limit_error(), _fake_response('{"action": "idle"}', 10, 5)]
+    )
+
+    with patch("otherworld.llm.providers.groq.asyncio.sleep", new=AsyncMock()):
+        completion = await provider.tier1(Prompt(system="s", messages=[]))
+
+    assert completion.text == '{"action": "idle"}'
+    assert provider._client.chat.completions.create.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_raises_after_exhausting_all_retries():
+    provider = GroqLLMProvider(api_key="test-key")
+    provider._client.chat.completions.create = AsyncMock(side_effect=_rate_limit_error())
+
+    with patch("otherworld.llm.providers.groq.asyncio.sleep", new=AsyncMock()), pytest.raises(RateLimitError):
+        await provider.tier1(Prompt(system="s", messages=[]))
+
+    assert provider._client.chat.completions.create.call_count == _APP_LEVEL_MAX_RETRIES
 
 
 @pytest.mark.asyncio

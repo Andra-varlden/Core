@@ -24,6 +24,7 @@ from otherworld.models.persona import (
 from otherworld.persona.boundaries import compile_free_text_boundary, default_boundaries
 from otherworld.persona.capture.interview import INTERVIEW_PROMPTS, InterviewResult
 from otherworld.persona.capture.questionnaire import TRAIT_ITEMS, QuestionnaireResult
+from otherworld.persona.capture.scenario import ScenarioReplayResult
 from otherworld.persona.scoring import TRAIT_NAMES, clamp01
 
 _QUESTIONNAIRE_CONFIDENCE_ANSWERED = 0.8
@@ -131,6 +132,48 @@ def apply_writing_sample(persona: PersonaObject, voice_kwargs: dict[str, object]
             "version": persona.version + 1,
             "voice": persona.voice.model_copy(update=voice_kwargs),
             "source_methods": [*persona.source_methods, "C"],
+            "field_confidence": merged_confidence,
+            "created_at": datetime.now(UTC),
+        }
+    )
+
+
+def apply_scenario_replay(persona: PersonaObject, result: ScenarioReplayResult) -> PersonaObject:
+    """Method D refines `decision_weight_overrides` only (spec.md §2.5) and
+    bumps the version, per the same-owner append-only field_confidence
+    rule. Each touched weight is a confidence-weighted blend with any
+    existing override — same formula as `merge_capture_into_persona`'s
+    trait blending, so re-running Method D later refines rather than
+    overwrites. Confidence for an override is tracked under
+    `field_confidence["decision_weight.<trait>"]`, parallel to how
+    `apply_writing_sample` tracks voice-field confidence under
+    `"voice.<field>"`.
+    """
+    merged_overrides = dict(persona.decision_weight_overrides)
+    merged_confidence = dict(persona.field_confidence)
+    for trait, new_value in result.decision_weight_overrides.items():
+        key = f"decision_weight.{trait}"
+        old_value = merged_overrides.get(trait)
+        new_confidence = result.confidences.get(trait, 0.0)
+        if old_value is None:
+            merged_overrides[trait] = new_value
+            merged_confidence[key] = new_confidence
+            continue
+        old_confidence = merged_confidence.get(key, 0.0)
+        total_confidence = old_confidence + new_confidence
+        merged_overrides[trait] = (
+            (old_value * old_confidence + new_value * new_confidence) / total_confidence
+            if total_confidence > 0
+            else new_value
+        )
+        merged_confidence[key] = clamp01(1 - (1 - old_confidence) * (1 - new_confidence))
+
+    return persona.model_copy(
+        update={
+            "id": uuid.uuid4(),
+            "version": persona.version + 1,
+            "decision_weight_overrides": merged_overrides,
+            "source_methods": [*persona.source_methods, "D"],
             "field_confidence": merged_confidence,
             "created_at": datetime.now(UTC),
         }

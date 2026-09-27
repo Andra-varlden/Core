@@ -58,6 +58,15 @@ async def run_maintenance_scan(
 ) -> None:
     edges = await get_all_edges(session, world_id)
 
+    # Rebuilt fresh rather than mutated in place — `edges` is a list of
+    # immutable pydantic models, so rebinding the loop variable (`edge =
+    # updated`) never changed what `edges` itself holds. The M4 real-trial
+    # audit found this meant CONTAGION/VALUE_CLASH below always saw this
+    # scan's PRE-decay/pre-demotion bond states, one full scan interval
+    # stale — e.g. an edge decay-demoted from Friend to Acquaintance a few
+    # lines above would still register as Friend+ for CONTAGION's own
+    # eligibility check right after.
+    updated_edges: list[RelationshipEdge] = []
     for edge in edges:
         updated = apply_trust_decay(edge, tick)
         updated = apply_decay(updated, tick)
@@ -71,10 +80,10 @@ async def run_maintenance_scan(
             )
         if updated != edge:
             await save_edge(session, updated)
-            edge = updated
+        updated_edges.append(updated)
 
-    await _apply_contagion(session, edges, bundles, rng, tick, damping_factor)
-    await _apply_value_clash(session, edges, agents, rng, tick, damping_factor)
+    await _apply_contagion(session, updated_edges, bundles, rng, tick, damping_factor)
+    await _apply_value_clash(session, updated_edges, agents, rng, tick, damping_factor)
 
 
 async def _apply_value_clash(

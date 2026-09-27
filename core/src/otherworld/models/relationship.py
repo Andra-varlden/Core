@@ -61,6 +61,13 @@ class RelationshipEdge(BaseModel):
     contact_count: int = 0
     last_contact_tick: int
     created_tick: int
+    # Tick `apply_trust_decay` last subtracted decay at, so the next scan
+    # accrues only the time elapsed since then instead of recomputing from
+    # the full, ever-growing `ticks_since_last_contact` on every periodic
+    # scan (the bug that slammed neglected pairs to trust=-1.0 within one or
+    # two scans and pinned them there — About/spec.md §6.3). None until the
+    # first decay application, and reset to None on fresh contact.
+    last_decay_tick: int | None = None
 
     @model_validator(mode="after")
     def _ordered_pair(self) -> RelationshipEdge:
@@ -88,6 +95,7 @@ class RelationshipEdgeORM(Base):
     contact_count: Mapped[int] = mapped_column(Integer, default=0)
     last_contact_tick: Mapped[int] = mapped_column(Integer)
     created_tick: Mapped[int] = mapped_column(Integer)
+    last_decay_tick: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
 
 
 def edge_to_orm(edge: RelationshipEdge) -> RelationshipEdgeORM:
@@ -104,6 +112,7 @@ def edge_to_orm(edge: RelationshipEdge) -> RelationshipEdgeORM:
         contact_count=edge.contact_count,
         last_contact_tick=edge.last_contact_tick,
         created_tick=edge.created_tick,
+        last_decay_tick=edge.last_decay_tick,
     )
 
 
@@ -121,4 +130,5 @@ def edge_from_orm(row: RelationshipEdgeORM) -> RelationshipEdge:
         contact_count=row.contact_count,
         last_contact_tick=row.last_contact_tick,
         created_tick=row.created_tick,
+        last_decay_tick=row.last_decay_tick,
     )

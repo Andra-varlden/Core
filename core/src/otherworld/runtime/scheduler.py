@@ -27,7 +27,7 @@ from otherworld.llm.protocol import LLMProvider
 from otherworld.models.agent import Agent
 from otherworld.models.events import EventRecord, Rejection, ValidatedAction
 from otherworld.models.memory import MemoryRecord
-from otherworld.models.relationship import BondState
+from otherworld.models.relationship import BondState, RelationshipEdge
 from otherworld.persona.compiler import AgentBundle
 from otherworld.runtime.clock import tick_to_datetime
 from otherworld.runtime.compression import compress_if_over_cap
@@ -342,6 +342,7 @@ class MultiAgentTickScheduler:
         tick: int,
         tier: Literal[1, 2],
         unmet: list[uuid.UUID],
+        relationships: dict[uuid.UUID, RelationshipEdge],
         constraint_note: str | None = None,
     ) -> ValidatedAction | Rejection:
         proposed, trace = await DecisionEngine.decide(
@@ -354,6 +355,7 @@ class MultiAgentTickScheduler:
             tier=tier,
             constraint_note=constraint_note,
             unmet_agent_ids=unmet or None,
+            relationships=relationships,
         )
         result = Validator.validate(
             proposed,
@@ -384,18 +386,39 @@ class MultiAgentTickScheduler:
 
         tier: Literal[1, 2] = 2 if unmet else 1
 
-        observation = PerceptionService.observe(agent, tick, other_agents_present=visible)
+        # `visible` is always in agent-id-sorted order (`_materialise_new_
+        # encounters`'s `{a.id: ... for a in self.agents}`, and `self.agents`
+        # is sorted once at construction) — the same order, every tick, for
+        # every agent. Found live during the M4 real trial: the
+        # alphanumerically-lowest agent ID was first (or near-first) in
+        # everyone else's list every single tick, and became a social
+        # "hub" bonded with all 4 others while the rest barely interacted —
+        # a textbook LLM list-position/primacy bias, not a persona trait.
+        # Shuffling (with the scheduler's own seeded rng, so determinism/
+        # T5.2 still holds) removes the fixed position for the model to
+        # anchor on.
+        shuffled_visible = list(visible)
+        self.rng.shuffle(shuffled_visible)
+        observation = PerceptionService.observe(agent, tick, other_agents_present=shuffled_visible)
         query_embedding = await self.provider.embed(f"tick {tick} ambient decision")
         retrieved = await RetrievalService.retrieve(self.session, agent.id, query_embedding, tick, tier=tier)
         shareable = await get_shareable_beliefs(self.session, agent.id)
         retrieved_ids = {m.id for m in retrieved}
         retrieved = [*retrieved, *(b for b in shareable if b.id not in retrieved_ids)]
 
-        result = await self._propose_and_validate(agent, observation, retrieved, tick, tier, unmet)
+        relationships: dict[uuid.UUID, RelationshipEdge] = {}
+        for other_id in visible:
+            edge = await get_edge(self.session, self.world_id, agent.id, other_id)
+            if edge is not None:
+                relationships[other_id] = edge
+
+        result = await self._propose_and_validate(
+            agent, observation, retrieved, tick, tier, unmet, relationships
+        )
         if isinstance(result, Rejection):
             constraint = f"Your previous choice was rejected ({result.reason}). Choose idle."
             result = await self._propose_and_validate(
-                agent, observation, retrieved, tick, tier, unmet, constraint_note=constraint
+                agent, observation, retrieved, tick, tier, unmet, relationships, constraint_note=constraint
             )
 
         if isinstance(result, Rejection):

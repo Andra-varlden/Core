@@ -111,6 +111,40 @@ async def test_memories_tied_to_a_conflict_are_protected_from_compression(db_ses
 
 
 @pytest.mark.asyncio
+async def test_an_old_high_importance_memory_survives_over_newer_low_importance_ones(db_session):
+    """Regression test for the M4 real-trial finding: compression must
+    prioritise by importance, not by age. An early, significant memory (a
+    first encounter, importance 0.60) is exactly the kind of memory that's
+    both old AND meaningful — sorting oldest-first would delete it before
+    any of the routine, low-importance chatter that came after it, even
+    though spec.md §5.4 says to compress the LOWEST-importance ones."""
+    cap = settings.memory.episodic_cap
+    batch = settings.memory.compression_batch
+
+    significant = MemoryRecord(
+        id=uuid.uuid4(), agent_id=AGENT_ID, kind=MemoryKind.EPISODIC, content="a first encounter",
+        embedding=await MockLLMProvider().embed("significant"), importance=0.60, tick=0,
+        subjects=[AGENT_ID], created_at=NOW,
+    )
+    db_session.add(memory_to_orm(significant))
+    await db_session.flush()
+
+    # Enough newer, low-importance routine memories to push the agent over
+    # cap without ever touching the significant one on tick-order alone.
+    await _seed_episodics(db_session, count=cap, start_tick=1)
+
+    belief = await compress_if_over_cap(
+        db_session, MockLLMProvider(), random.Random(1), AGENT_ID, tick=cap + 100, created_at=NOW
+    )
+
+    assert belief is not None
+    assert len(belief.derived_from) == batch
+    assert significant.id not in belief.derived_from
+    still_there = await db_session.get(MemoryRecordORM, significant.id)
+    assert still_there is not None
+
+
+@pytest.mark.asyncio
 async def test_a_busy_conflicted_edge_does_not_block_compression_forever(db_session):
     """A regression guard for About/plan.md T5.1's pilot-run finding: an
     edge accumulates `shared_memory_ids` on every interaction forever, so

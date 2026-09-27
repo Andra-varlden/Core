@@ -36,7 +36,22 @@ class MemoryConfig(BaseModel):
 
 class ReflectionConfig(BaseModel):
     interval_ticks: int = 150
-    importance_sum_trigger: float = 8.0
+    # spec.md §5.1's own cost model (§15.2: "~58 reflections/agent/day, every
+    # 150 ticks") assumes the interval is the ordinary cadence and this sum
+    # trigger only an "alternative" for unusually eventful stretches. The
+    # original 8.0 [TUNE] guess didn't survive contact with a real 5-agent,
+    # always-witnessed world: the M4 real trial measured actual importance
+    # accrual at ~0.89/tick (witnessed routine chatter alone gets there,
+    # since +0.10 fires whenever 3+ of the other 4 agents see it), so 8.0
+    # tripped within ~9 ticks — reflection fired 5-16x more often than the
+    # interval implied (confirmed against real belief-memory counts: alpha
+    # world ~10,000 ticks logged 500-1,075 beliefs/agent against an
+    # interval-only prediction of ~66), silently multiplying LLM spend for
+    # the whole run. Set above what ~150 ticks of ordinary busy chatter
+    # accrues (150 x 0.89 =~ 133) so the interval is normally what fires,
+    # while a genuinely eventful burst (several relationship transitions or
+    # conflicts close together) can still trigger it early, as intended.
+    importance_sum_trigger: float = 200.0
     input_memory_count: int = 30
 
 

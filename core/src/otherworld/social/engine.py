@@ -143,12 +143,27 @@ def apply_trust_decay(edge: RelationshipEdge, current_tick: int) -> Relationship
     decay at half rate. Callers decide how often to check (About/plan.md M5
     scope calls for a periodic scan, not every tick for every edge —
     `social/maintenance.py`).
+
+    Accrues decay from `last_decay_tick` (or from the moment the grace
+    period lapses, for the first check), not from the full
+    `ticks_since_last_contact` on every call. The M4 real trial found the
+    latter re-subtracts a decay sized to the WHOLE, ever-growing neglect gap
+    on top of the already-decayed trust every time the periodic scan runs
+    on a stale edge — slamming any pair that goes unscanned-while-stale
+    straight to trust=-1.0 within one or two scans and pinning it there
+    forever, since the recomputed decay only ever grows.
     """
     ticks_since_contact = current_tick - edge.last_contact_tick
     if ticks_since_contact <= settings.relationships.decay_starts_after_ticks:
         return edge
 
+    decay_start_tick = edge.last_contact_tick + settings.relationships.decay_starts_after_ticks
+    anchor = max(decay_start_tick, edge.last_decay_tick or decay_start_tick)
+    elapsed = current_tick - anchor
+    if elapsed <= 0:
+        return edge
+
     multiplier = settings.relationships.seeded_decay_multiplier if edge.seeded else 1.0
-    decay = settings.relationships.decay_per_tick * multiplier * ticks_since_contact
+    decay = settings.relationships.decay_per_tick * multiplier * elapsed
     new_trust = max(-1.0, edge.trust - decay)
-    return edge.model_copy(update={"trust": new_trust})
+    return edge.model_copy(update={"trust": new_trust, "last_decay_tick": current_tick})

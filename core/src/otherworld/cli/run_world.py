@@ -7,7 +7,10 @@ reads real EventRecords, and those only exist once a captured PersonaObject
 (About/plan.md M1) has actually been compiled, bound, and run through the
 tick loop (M2/M3). Reuses an existing World/Agent for each owner if one
 already exists in the named world, so re-running just keeps simulating
-forward rather than starting over.
+forward rather than starting over — including after a mid-run crash (a
+real provider's rate limit, About/plan.md's M4 pilot run): progress
+resumes from the last actually-recorded EventRecord, and agent state is
+persisted every `--commit-every` ticks rather than only at the very end.
 
 Uses `otherworld.llm.factory.get_default_provider()` — a real provider
 (currently Groq, About/spec.md §15.3) if `GROQ_API_KEY` is set, else the
@@ -27,11 +30,12 @@ import random
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from otherworld.db import async_session_factory
 from otherworld.llm.factory import get_default_provider
 from otherworld.models.agent import AgentORM, agent_from_orm, agent_to_orm
+from otherworld.models.events import EventRecordORM
 from otherworld.models.world import World, WorldORM, world_from_orm, world_to_orm
 from otherworld.owner.service import get_or_create_owner
 from otherworld.persona.binder import Binder
@@ -78,7 +82,13 @@ async def _get_or_spawn_agent(session, world_id: uuid.UUID, handle: str, email: 
     return agent, bundle
 
 
-async def _main(world_name: str, ticks: int, owner_specs: list[tuple[str, str]]) -> None:
+async def _main(
+    world_name: str,
+    ticks: int,
+    owner_specs: list[tuple[str, str]],
+    commit_every: int,
+    progress_every: int,
+) -> None:
     async with async_session_factory() as session:
         world = await _get_or_create_world(session, world_name, population_cap=len(owner_specs))
 
@@ -90,17 +100,39 @@ async def _main(world_name: str, ticks: int, owner_specs: list[tuple[str, str]])
             bundles[agent.id] = bundle
         await session.commit()
 
+        # Resume from the last actually-recorded tick, not `agent.last_tick`
+        # — the latter was only ever persisted at the very end of a full
+        # run (see the periodic commit below), so a crash mid-run (a real
+        # provider's rate limit, About/plan.md's M4 pilot run) would
+        # otherwise restart from tick 0 and re-simulate — re-spending real
+        # LLM tokens on — a range that already has real EventRecords.
+        last_event_tick = (
+            await session.execute(
+                select(func.max(EventRecordORM.tick)).where(EventRecordORM.world_id == world.id)
+            )
+        ).scalar_one_or_none()
+        start_tick = (last_event_tick + 1) if last_event_tick is not None else 0
+
         seed = random.SystemRandom().randrange(2**32)
         provider = get_default_provider()
         scheduler = MultiAgentTickScheduler(
             session, provider, random.Random(seed), world.id, agents, bundles
         )
-        start_tick = max((a.last_tick for a in agents), default=0)
-        events = await scheduler.run(ticks, start_tick=start_tick)
 
-        # Persist advanced last_tick so re-running this world continues
-        # forward instead of restarting at tick 0 and re-simulating (and
-        # re-writing events for) a range that's already happened.
+        total_events = 0
+        for done, tick in enumerate(range(start_tick, start_tick + ticks), start=1):
+            total_events += len(await scheduler.run_tick(tick))
+            if done % commit_every == 0:
+                # Persists agent position/goals/last_tick incrementally, not
+                # just at the end — a mid-run crash now loses at most
+                # `commit_every` ticks of in-memory agent state, not the
+                # whole run's worth.
+                for agent in agents:
+                    await session.merge(agent_to_orm(agent))
+                await session.commit()
+            if progress_every and done % progress_every == 0:
+                print(f"tick {tick} ({done}/{ticks} this run) | events so far: {total_events}", flush=True)
+
         for agent in agents:
             await session.merge(agent_to_orm(agent))
         await session.commit()
@@ -108,7 +140,7 @@ async def _main(world_name: str, ticks: int, owner_specs: list[tuple[str, str]])
     end_tick = start_tick + ticks - 1
     print(f"Provider: {type(provider).__name__}")
     print(f"World '{world_name}' ({world.id}): ran ticks {start_tick}..{end_tick} (seed={seed})")
-    print(f"{len(events)} events written across {len(agents)} agents.")
+    print(f"{total_events} events written across {len(agents)} agents.")
     for handle, _email in owner_specs:
         print(f"  - {handle}")
 
@@ -121,6 +153,19 @@ def main() -> None:
         "--owners", nargs="+", metavar="HANDLE:EMAIL", required=True,
         help="One or more 'handle:email' pairs, each already captured via otherworld.cli.capture",
     )
+    parser.add_argument(
+        "--commit-every", type=int, default=1,
+        help="Persist agent state every N ticks, so a crash (e.g. a real provider's rate limit) "
+        "loses at most this many ticks of in-memory agent state, not the whole run. Defaults to "
+        "every tick: an uncommitted tick's *flushed* EventRecords are still rolled back on a crash "
+        "(confirmed live, About/plan.md's M4 pilot — a batch of 10 silently lost 6 free sleep-tick "
+        "events to a rollback), and a real LLM tick costs real tokens, so there's no reason to "
+        "batch commits against a cost this asymmetric.",
+    )
+    parser.add_argument(
+        "--progress-every", type=int, default=10,
+        help="Print a progress line every N ticks; 0 disables progress output",
+    )
     args = parser.parse_args()
     owner_specs = []
     for spec in args.owners:
@@ -129,7 +174,7 @@ def main() -> None:
             raise SystemExit(f"--owners entries must be 'handle:email', got: {spec!r}")
         owner_specs.append((handle, email))
 
-    asyncio.run(_main(args.world_name, args.ticks, owner_specs))
+    asyncio.run(_main(args.world_name, args.ticks, owner_specs, args.commit_every, args.progress_every))
 
 
 if __name__ == "__main__":

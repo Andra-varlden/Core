@@ -7,7 +7,9 @@ import pytest
 from otherworld.models.persona import PersonaObjectORM, persona_from_orm
 from otherworld.persona.capture.interview import score_interview
 from otherworld.persona.capture.questionnaire import score_questionnaire
+from otherworld.persona.capture.scenario import score_scenario_replay
 from otherworld.persona.service import (
+    apply_scenario_replay,
     build_persona_from_interview,
     build_persona_from_questionnaire,
     edit_persona,
@@ -122,3 +124,46 @@ async def test_second_capture_merges_into_a_new_version_not_a_duplicate_v1(db_se
 
     # boundaries carried forward, not duplicated.
     assert sum(1 for b in v2.boundaries if b.description == "no theft") == 1
+
+
+@pytest.mark.asyncio
+async def test_method_d_refines_decision_weights_of_an_existing_persona(db_session):
+    """spec.md §2.5: Method D produces decision_weight_overrides, not
+    TraitVector values — `values` itself must stay untouched, only
+    `decision_weight_overrides` (and field_confidence) change."""
+    owner_id = uuid.uuid4()
+    a_result = score_questionnaire(ALPHA_ANSWERS, ALPHA_FREE_TEXT)
+    v1 = build_persona_from_questionnaire(owner_id, ALPHA_ANSWERS, a_result)
+    await save_persona(db_session, v1)
+
+    d_result = score_scenario_replay({"D1": "a", "D2": "a"})
+    v2 = await get_latest_persona(db_session, owner_id)
+    assert v2 is not None
+    v2 = apply_scenario_replay(v2, d_result)
+    await save_persona(db_session, v2)
+
+    assert v2.version == 2
+    assert v2.source_methods == ["A", "D"]
+    assert v2.values == v1.values  # Method D never touches the trait vector
+    assert v2.decision_weight_overrides["sociability"] == d_result.decision_weight_overrides["sociability"]
+
+    reloaded = await get_persona_version(db_session, owner_id, 2)
+    assert reloaded == v2
+
+
+@pytest.mark.asyncio
+async def test_method_d_blends_with_its_own_prior_override_not_overwrites(db_session):
+    owner_id = uuid.uuid4()
+    a_result = score_questionnaire(ALPHA_ANSWERS, ALPHA_FREE_TEXT)
+    v1 = build_persona_from_questionnaire(owner_id, ALPHA_ANSWERS, a_result)
+    await save_persona(db_session, v1)
+
+    first_pass = apply_scenario_replay(v1, score_scenario_replay({"D1": "a"}))  # sociability -> high
+    second_pass = apply_scenario_replay(first_pass, score_scenario_replay({"D1": "c"}))  # sociability -> low
+
+    # Blended, not simply replaced: strictly between the two extremes.
+    high = score_scenario_replay({"D1": "a"}).decision_weight_overrides["sociability"]
+    low = score_scenario_replay({"D1": "c"}).decision_weight_overrides["sociability"]
+    blended = second_pass.decision_weight_overrides["sociability"]
+    assert low < blended < high
+    assert second_pass.version == 3

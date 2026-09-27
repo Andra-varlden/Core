@@ -70,6 +70,13 @@ class PersonaObject(BaseModel):
     boundaries: list[BoundaryRule] = Field(default_factory=list)
     source_methods: list[CaptureMethod] = Field(default_factory=list)
     field_confidence: dict[str, float] = Field(default_factory=dict)
+    # Method D only (spec.md §2.5) — trained overrides for
+    # `persona.compiler.Compiler.compile`'s `decision_weights`, keyed by the
+    # same trait names as `values` but populated from observed scenario
+    # choices rather than derived from self-reported answers. Only the
+    # weights Method D actually has evidence for are present; everything
+    # else keeps falling back to `values`.
+    decision_weight_overrides: dict[str, float] = Field(default_factory=dict)
     created_at: datetime
     compiled_at: datetime | None = None
 
@@ -86,6 +93,7 @@ class PersonaObjectORM(Base):
     boundaries: Mapped[list[Any]] = mapped_column(JSON, default=list)
     source_methods: Mapped[list[Any]] = mapped_column(JSON, default=list)
     field_confidence: Mapped[dict[str, float]] = mapped_column(JSON, default=dict)
+    decision_weight_overrides: Mapped[dict[str, float]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     compiled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -101,6 +109,7 @@ def persona_to_orm(persona: PersonaObject) -> PersonaObjectORM:
         boundaries=[b.model_dump(mode="json") for b in persona.boundaries],
         source_methods=list(persona.source_methods),
         field_confidence=dict(persona.field_confidence),
+        decision_weight_overrides=dict(persona.decision_weight_overrides),
         created_at=persona.created_at,
         compiled_at=persona.compiled_at,
     )
@@ -117,6 +126,7 @@ def persona_from_orm(row: PersonaObjectORM) -> PersonaObject:
         boundaries=[BoundaryRule.model_validate(b) for b in row.boundaries],
         source_methods=list(row.source_methods),
         field_confidence=dict(row.field_confidence),
+        decision_weight_overrides=dict(row.decision_weight_overrides),
         created_at=row.created_at,
         compiled_at=row.compiled_at,
     )

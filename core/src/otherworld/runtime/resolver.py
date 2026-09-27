@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from otherworld.llm.protocol import LLMProvider
 from otherworld.models.agent import Position
-from otherworld.models.events import EventRecord, event_to_orm
+from otherworld.models.events import EventRecord, EventRecordORM, event_to_orm
 from otherworld.models.memory import MemoryKind, MemoryRecord, MemoryRecordORM, memory_from_orm, memory_to_orm
 from otherworld.models.relationship import BondState, RelationshipEdge
 from otherworld.persona.compiler import AgentBundle
@@ -45,6 +45,17 @@ _GOSSIP_ACTION = "confide"
 # regardless of which action triggered them — and a single action can be
 # both at once (a first-ever greet that immediately promotes Stranger ->
 # Acquaintance), in which case the higher of the two applies.
+#
+# Every RELATIONAL/MATERIAL action besides betray was missing from this
+# table until 2026-09-18 — found live during the M4 real trial: even after
+# fixing the decision prompt/model so the real LLM started actually
+# choosing `compliment`/`speak_to`, those events still couldn't clear the
+# Recognition Metric's importance>=0.3 floor (spec.md §14 step 1), because
+# every unlisted action silently fell to `_DEFAULT_IMPORTANCE` (0.05, the
+# routine-movement tier) — the same as `idle`. Spec.md §5.1 has no distinct
+# row for "compliment" specifically, but they're all the same class of
+# thing as the "Ambient speech" row (0.15) that `greet`/`speak_to` already
+# used: a routine social exchange, not nothing.
 _BASE_IMPORTANCE: dict[str, float] = {
     "idle": 0.05,
     "sleep": 0.05,
@@ -53,13 +64,40 @@ _BASE_IMPORTANCE: dict[str, float] = {
     "flee": 0.05,
     "greet": 0.15,
     "speak_to": 0.15,
+    "compliment": 0.15,
+    "criticise": 0.15,
+    "apologise": 0.15,
+    "forgive": 0.15,
+    "reject": 0.15,
+    "confide": 0.15,
+    "ignore": 0.15,
+    "join_group": 0.15,
+    "leave_group": 0.15,
+    "give": 0.15,
+    "request": 0.15,
+    "trade": 0.15,
+    "take": 0.15,
+    "gather": 0.15,
+    "build": 0.15,
+    "destroy": 0.15,
     "betray": 0.95,
 }
 _DEFAULT_IMPORTANCE = 0.05
 _FIRST_ENCOUNTER_IMPORTANCE = 0.60
 _RELATIONSHIP_STATE_CHANGE_IMPORTANCE = 0.75
+_CONFLICT_TRIGGER_IMPORTANCE = 0.85
+_CONFLICT_RESOLUTION_IMPORTANCE = 0.90
+_CLOSE_BOND_IMPORTANCE = 0.95  # spec.md §5.1: a distinct, higher tier than a generic state change
 _WITNESS_BONUS_THRESHOLD = 3
 _WITNESS_BONUS = 0.10
+# spec.md §5.1's modifiers row: "-0.20 if the same event class occurred for
+# this agent within 50 ticks (repetition damping)" — missing entirely until
+# the M4 real trial's post-mortem audit found it. Without it, an agent that
+# mostly repeats greet/compliment (exactly this trial's behaviour pattern)
+# has every repeat scored as if it were independently fresh, diluting the
+# Recognition Metric's pool of genuinely distinctive qualifying events.
+_REPETITION_DAMPING = 0.20
+_REPETITION_WINDOW_TICKS = 50
 
 # [TUNE] No memory below this importance gets written at all. 0.0 for now —
 # spec.md's compression machinery (§5.4), not a write-time cutoff, is what
@@ -78,6 +116,22 @@ async def _max_shared_importance(session: AsyncSession, memory_ids: list[uuid.UU
         await session.execute(select(MemoryRecordORM.importance).where(MemoryRecordORM.id.in_(memory_ids)))
     ).scalars().all()
     return max(rows, default=0.0)
+
+
+async def _recently_repeated(session: AsyncSession, actor_id: uuid.UUID, action: str, tick: int) -> bool:
+    last_tick = (
+        await session.execute(
+            select(EventRecordORM.tick)
+            .where(
+                EventRecordORM.actor_id == actor_id,
+                EventRecordORM.action == action,
+                EventRecordORM.tick < tick,
+            )
+            .order_by(EventRecordORM.tick.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return last_tick is not None and (tick - last_tick) <= _REPETITION_WINDOW_TICKS
 
 
 async def _maybe_gossip(
@@ -156,7 +210,17 @@ class Resolver:
         # reach the edge-update loop below even though it isn't a "social
         # interaction" in the narrower, category sense `is_social_interaction`
         # tests for elsewhere (Friend-eligibility, close-bond gating).
-        social = (is_social_interaction(action) or action in TRUST_DELTAS) and bool(targets)
+        #
+        # `give` is the same story, found live during the M4 real trial:
+        # it's About/spec.md §6.5's *only* costly-loyalty-act path to Close
+        # Bond (`is_costly_loyalty_act` below), but it's neither a
+        # SOCIAL/RELATIONAL category action nor in TRUST_DELTAS — so despite
+        # the model actually choosing it 130-190 times once nudged to try
+        # it, it never once reached this edge-update loop, and Close Bond
+        # promotion silently never checked for it at all.
+        social = (
+            is_social_interaction(action) or action in TRUST_DELTAS or is_costly_loyalty_act(action)
+        ) and bool(targets)
 
         # Resolve trust and bond-state consequences first, using only
         # shared memories that already existed before this tick — this
@@ -167,15 +231,40 @@ class Resolver:
         edges: dict[uuid.UUID, RelationshipEdge] = {}
         relationship_deltas: list[dict[str, object]] = []
         state_changed = False
+        close_bond_formed = False
+        first_direct_contact = False
+        conflict_triggered = False
+        conflict_resolved = False
         for target_id in targets if social else []:
             edge, _created = await get_or_create_edge(
                 session, world_id, actor_id, target_id, seeded_uuid(rng), tick
             )
             before_state, before_trust = edge.bond_state, edge.trust
+            before_conflict_count = len(edge.conflict_log)
+            before_open_record_ids = {r.id for r in edge.conflict_log if r.resolved_tick is None}
+            # `first_encounter` (passed in) only fires on the single tick an
+            # edge is first materialised by mutual visibility — About/
+            # runtime/scheduler.py's `MultiAgentTickScheduler` docstring. In
+            # a world where everyone's mutually visible from tick 0 (the M4
+            # real trial's 5-person world), that's a one-tick lottery: each
+            # agent can only act on ONE target that tick, so most pairs
+            # never win it and can then never clear the Friend-promotion
+            # memory-importance gate below (`_max_shared_importance` >=
+            # `friend_shared_memory_importance`) no matter how much they
+            # talk afterward — routine actions cap out at 0.15 + the
+            # witness bonus, nowhere near it. `contact_count == 0` is the
+            # durable signal: this pair's actual first direct interaction,
+            # whenever it happens, not whichever tick visibility happened
+            # to line up.
+            first_direct_contact = first_direct_contact or edge.contact_count == 0
 
             edge = apply_trust_delta(edge, action)
             edge = edge.model_copy(
-                update={"contact_count": edge.contact_count + 1, "last_contact_tick": tick}
+                update={
+                    "contact_count": edge.contact_count + 1,
+                    "last_contact_tick": tick,
+                    "last_decay_tick": None,  # fresh contact restarts the decay clock cleanly
+                }
             )
 
             if edge.bond_state in (BondState.BROKEN, BondState.FEUD):
@@ -204,6 +293,13 @@ class Resolver:
 
             edges[target_id] = edge
             state_changed = state_changed or edge.bond_state != before_state
+            close_bond_formed = close_bond_formed or (
+                edge.bond_state == BondState.CLOSE_BOND and before_state != BondState.CLOSE_BOND
+            )
+            conflict_triggered = conflict_triggered or len(edge.conflict_log) > before_conflict_count
+            conflict_resolved = conflict_resolved or any(
+                r.id in before_open_record_ids and r.resolved_tick is not None for r in edge.conflict_log
+            )
             relationship_deltas.append(
                 {
                     "target_id": str(target_id),
@@ -215,10 +311,18 @@ class Resolver:
             )
 
         importance = importance_for_action(action)
-        if first_encounter:
+        if await _recently_repeated(session, actor_id, action, tick):
+            importance = max(0.0, importance - _REPETITION_DAMPING)
+        if first_encounter or first_direct_contact:
             importance = max(importance, _FIRST_ENCOUNTER_IMPORTANCE)
         if state_changed:
             importance = max(importance, _RELATIONSHIP_STATE_CHANGE_IMPORTANCE)
+        if conflict_triggered:
+            importance = max(importance, _CONFLICT_TRIGGER_IMPORTANCE)
+        if conflict_resolved:
+            importance = max(importance, _CONFLICT_RESOLUTION_IMPORTANCE)
+        if close_bond_formed:
+            importance = max(importance, _CLOSE_BOND_IMPORTANCE)
         if len(witnesses) >= _WITNESS_BONUS_THRESHOLD:
             importance = min(1.0, importance + _WITNESS_BONUS)
 

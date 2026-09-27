@@ -2,10 +2,17 @@
 
     python -m otherworld.cli.capture --method A --handle jpf --email jpf@example.com
     python -m otherworld.cli.capture --method B --handle jpf --email jpf@example.com
+    python -m otherworld.cli.capture --method D --handle jpf --email jpf@example.com
 
 Run once per real person (About/plan.md M1 deliverable: 4-5 real persona
 objects — the founder plus the M4 Recognition Metric subjects, recruited
 now per the README's open items).
+
+Method D (scenario replay, spec.md §2.5) refines an *existing* persona
+rather than building a fresh one — run Method A or B first. Built ahead of
+spec.md's own "Phase 2+" placement note for it, specifically because a
+real M4 Recognition Metric trial came back "weak" (56-69%), which is the
+one case spec.md's own interpretation table (§14) calls for adding it.
 """
 
 from __future__ import annotations
@@ -19,7 +26,9 @@ from otherworld.owner.service import get_or_create_owner
 from otherworld.persona.boundaries import DEFAULT_BOUNDARY_TOGGLES
 from otherworld.persona.capture.interview import ALL_PROMPTS, score_interview
 from otherworld.persona.capture.questionnaire import FREE_TEXT_ITEM_IDS, TRAIT_ITEMS, score_questionnaire
+from otherworld.persona.capture.scenario import SCENARIOS, score_scenario_replay
 from otherworld.persona.service import (
+    apply_scenario_replay,
     build_persona_from_interview,
     build_persona_from_questionnaire,
     edit_persona,
@@ -98,11 +107,31 @@ def run_interview() -> dict[str, str]:
     return {prompt.id: _ask_free_text(prompt.prompt) for prompt in ALL_PROMPTS}
 
 
+def _ask_scenario(prompt: str, options: dict[str, tuple[str, str]]) -> str:
+    print(f"\n{prompt}")
+    for letter, (action, framing) in options.items():
+        print(f"  ({letter}) {action} — {framing}")
+    while True:
+        choice = input("> ").strip().lower()
+        if choice in options:
+            return choice
+        print(f"Please answer one of: {', '.join(options)}")
+
+
+def run_scenario_replay() -> dict[str, str]:
+    return {scenario.id: _ask_scenario(scenario.prompt, scenario.options) for scenario in SCENARIOS}
+
+
 def _print_summary(persona: PersonaObject) -> None:
     print(f"\nPersonaObject {persona.id} (v{persona.version}, method {persona.source_methods})")
     for trait, value in persona.values.model_dump().items():
         conf = persona.field_confidence.get(trait, 0.5)
         print(f"  {trait:26s} {value:.2f}  (confidence {conf:.2f})")
+    if persona.decision_weight_overrides:
+        print("  decision_weight_overrides (Method D — override the trait values above):")
+        for trait, value in persona.decision_weight_overrides.items():
+            conf = persona.field_confidence.get(f"decision_weight.{trait}", 0.0)
+            print(f"    {trait:24s} {value:.2f}  (confidence {conf:.2f})")
     print(f"  voice: {persona.voice.model_dump()}")
     print("  boundaries:")
     for rule in persona.boundaries:
@@ -118,7 +147,17 @@ async def _main(method: str, handle: str, email: str) -> None:
                   f"for {handle} — this capture will refine it into a new version, not replace it.")
 
         persona: PersonaObject
-        if method == "A":
+        if method == "D":
+            if existing is None:
+                raise SystemExit(
+                    f"'{handle}' has no captured persona yet — Method D refines an existing one "
+                    "(spec.md §2.5); run --method A or --method B first."
+                )
+            answers_d = run_scenario_replay()
+            d_result = score_scenario_replay(answers_d)
+            persona = apply_scenario_replay(existing, d_result)
+            await save_persona(session, persona)
+        elif method == "A":
             answers_a, free_text = run_questionnaire()
             enabled_boundaries = _ask_boundary_toggles()
             a_result = score_questionnaire(answers_a, free_text)
@@ -171,7 +210,7 @@ async def _main(method: str, handle: str, email: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Capture a persona (About/spec.md §2).")
-    parser.add_argument("--method", choices=["A", "B"], required=True)
+    parser.add_argument("--method", choices=["A", "B", "D"], required=True)
     parser.add_argument("--handle", required=True)
     parser.add_argument("--email", required=True)
     args = parser.parse_args()

@@ -128,9 +128,12 @@ def test_apply_decay_demotes_stale_acquaintance_to_stranger():
 
 
 def test_trust_decay_matches_spec_formula_and_halves_for_seeded_edges():
+    """spec.md §6.3: decay accrues from the moment the grace period lapses
+    (tick 300), not from tick 0 — `ticks_since_last_contact > 300` is the
+    *gate*, not the multiplier's own start point."""
     edge = _edge(trust=0.5, last_contact_tick=0)
     decayed = apply_trust_decay(edge, current_tick=1000)
-    expected = max(-1.0, 0.5 - 0.0008 * 1000)
+    expected = max(-1.0, 0.5 - 0.0008 * (1000 - 300))
     assert abs(decayed.trust - expected) < 1e-9
 
     seeded = edge.model_copy(update={"seeded": True})
@@ -141,6 +144,67 @@ def test_trust_decay_matches_spec_formula_and_halves_for_seeded_edges():
 def test_trust_decay_is_a_noop_before_the_grace_period():
     edge = _edge(trust=0.5, last_contact_tick=0)
     assert apply_trust_decay(edge, current_tick=100).trust == 0.5
+
+
+def test_trust_decay_sets_last_decay_tick_so_the_next_check_can_be_incremental():
+    edge = _edge(trust=0.5, last_contact_tick=0)
+    decayed = apply_trust_decay(edge, current_tick=1000)
+    assert decayed.last_decay_tick == 1000
+
+
+def test_repeated_periodic_scans_do_not_compound_beyond_the_true_elapsed_decay():
+    """Regression test for the real M4 trial bug: `social/maintenance.py`
+    calls `apply_trust_decay` on every scan (every `scan_interval_ticks`)
+    for every stale edge. Before this fix, each call recomputed decay from
+    the FULL, ever-growing `ticks_since_last_contact` and re-subtracted it
+    from the already-decayed trust — so a pair scanned repeatedly while
+    neglected fell to trust=-1.0 within one or two scans regardless of the
+    real elapsed time, and stayed pinned there. Simulating 20 scans, 50
+    ticks apart (the real `scan_interval_ticks` default), must land at the
+    same trust as a single check at the final tick — not far below it."""
+    edge = _edge(trust=0.5, last_contact_tick=0)
+
+    repeatedly_scanned = edge
+    for scan_tick in range(50, 1050, 50):
+        repeatedly_scanned = apply_trust_decay(repeatedly_scanned, current_tick=scan_tick)
+
+    single_check = apply_trust_decay(edge, current_tick=1000)
+    assert abs(repeatedly_scanned.trust - single_check.trust) < 1e-9
+
+
+def test_a_moderate_unscanned_gap_decays_gradually_not_straight_to_the_floor():
+    """The actual reported symptom: a pair whose first-ever decay check
+    lands well past the grace period must decay by exactly the real
+    elapsed-since-grace-period amount, not fall straight to trust=-1.0
+    regardless of how small that amount actually is."""
+    edge = _edge(trust=0.5, last_contact_tick=0)
+    decayed = apply_trust_decay(edge, current_tick=900)  # 600 ticks past the grace period
+    expected = 0.5 - 0.0008 * 600  # == 0.02, nowhere near the floor
+    assert abs(decayed.trust - expected) < 1e-9
+    assert decayed.trust > -1.0
+
+
+def test_decay_resumes_incrementally_after_an_earlier_partial_check():
+    edge = _edge(trust=0.5, last_contact_tick=0)
+    first_check = apply_trust_decay(edge, current_tick=400)  # 100 ticks past the grace period
+    assert abs(first_check.trust - (0.5 - 0.0008 * 100)) < 1e-9
+    assert first_check.last_decay_tick == 400
+
+    second_check = apply_trust_decay(first_check, current_tick=500)  # 100 more ticks
+    expected = first_check.trust - 0.0008 * 100
+    assert abs(second_check.trust - expected) < 1e-9
+
+
+def test_fresh_contact_resets_the_decay_clock():
+    """`runtime/resolver.py` resets `last_decay_tick` to None on every
+    contact — a revived relationship's decay should restart from the new
+    contact, not keep accruing from a stale anchor."""
+    edge = _edge(trust=0.5, last_contact_tick=0)
+    decayed = apply_trust_decay(edge, current_tick=1000)
+    assert decayed.last_decay_tick == 1000
+
+    revived = decayed.model_copy(update={"last_contact_tick": 1000, "last_decay_tick": None})
+    assert apply_trust_decay(revived, current_tick=1100).trust == decayed.trust  # still within grace period
 
 
 def test_reconciliation_from_broken_via_forgive():

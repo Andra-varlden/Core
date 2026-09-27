@@ -148,6 +148,51 @@ async def test_scan_applies_contagion_from_a_feuding_friend(db_session):
 
 
 @pytest.mark.asyncio
+async def test_contagion_uses_this_scans_own_decay_demoted_state_not_stale_data(db_session):
+    """Regression test for the M4 real-trial post-mortem audit: `edges` was
+    fetched once and never actually updated in place (pydantic models are
+    copy-on-write, and rebinding the loop variable doesn't mutate the list),
+    so CONTAGION/VALUE_CLASH always saw every edge's state from BEFORE this
+    scan's own decay and decay-driven demotion ran, one whole scan interval
+    stale. Here A-B starts Friend but has gone silent long enough that this
+    exact scan's own decay demotes it below Friend before CONTAGION's
+    Friend+ eligibility check runs a few lines later — A-C must NOT get
+    contagion from B's feud with C, because A isn't Friend+ with B anymore
+    as of this scan.
+    """
+    world_id = uuid.uuid4()
+
+    ab, _ = await get_or_create_edge(db_session, world_id, A_ID, B_ID, uuid.uuid4(), tick=0)
+    # trust=0.30 with no contact since tick 0 decays to well below
+    # `demote_friend_below` (0.25) by the time this scan runs at tick 2000.
+    ab = ab.model_copy(update={"bond_state": BondState.FRIEND, "trust": 0.30, "last_contact_tick": 0})
+    await save_edge(db_session, ab)
+
+    bc, _ = await get_or_create_edge(db_session, world_id, B_ID, C_ID, uuid.uuid4(), tick=0)
+    bc = bc.model_copy(update={"bond_state": BondState.FEUD, "trust": -0.8})
+    await save_edge(db_session, bc)
+
+    # last_contact_tick kept recent so A-C doesn't ALSO decay/demote on its
+    # own this scan — the point is to isolate whether CONTAGION incorrectly
+    # fires onto it, not to also exercise A-C's own staleness.
+    ac, _ = await get_or_create_edge(db_session, world_id, A_ID, C_ID, uuid.uuid4(), tick=0)
+    ac = ac.model_copy(update={"bond_state": BondState.ACQUAINTANCE, "trust": 0.1, "last_contact_tick": 1990})
+    await save_edge(db_session, ac)
+
+    bundles = {A_ID: _bundle(loyalty=0.9, independence=0.1)}
+
+    await run_maintenance_scan(db_session, world_id, [], bundles, random.Random(1), tick=2000)
+
+    demoted_ab = await get_edge(db_session, world_id, A_ID, B_ID)
+    assert demoted_ab is not None and demoted_ab.bond_state != BondState.FRIEND
+
+    updated_ac = await get_edge(db_session, world_id, A_ID, C_ID)
+    assert updated_ac is not None
+    assert updated_ac.bond_state == BondState.ACQUAINTANCE  # no contagion — A-B wasn't Friend+ this scan
+    assert updated_ac.conflict_log == []
+
+
+@pytest.mark.asyncio
 async def test_scan_skips_contagion_for_a_highly_independent_agent(db_session):
     world_id = uuid.uuid4()
 

@@ -19,6 +19,7 @@ from otherworld.llm.protocol import LLMProvider, Prompt
 from otherworld.models.agent import Agent
 from otherworld.models.events import ActionCategory, ProposedAction
 from otherworld.models.memory import MemoryKind, MemoryRecord
+from otherworld.models.relationship import BondState, RelationshipEdge
 from otherworld.persona.compiler import AgentBundle
 from otherworld.runtime.clock import tick_to_datetime
 from otherworld.runtime.json_util import extract_json_object
@@ -92,6 +93,83 @@ def _goal_stack_summary(agent: Agent) -> str:
     return f"Your current goals: {goals}."
 
 
+def _relationship_context_summary(
+    visible_agents: list[uuid.UUID], relationships: dict[uuid.UUID, RelationshipEdge]
+) -> str:
+    """Without this, every visible agent is just an opaque UUID with no
+    social stakes attached — About/plan.md M4's real-run finding (tried
+    after `_recent_memory_summary` alone didn't change anything): a model
+    with no sense of "this is a close friend" vs. "we've never really
+    spoken" has no reason to treat anyone differently, so it reliably
+    defaults to the same generic greet/idle regardless of who's actually
+    there.
+
+    Also flags whichever visible agent has the LOWEST `contact_count` among
+    them, when the group isn't already even. About/plan.md's M4 real trial
+    found this summary's own trust/bond_state framing turns any early,
+    accidental imbalance into a self-reinforcing ratchet: the model has an
+    explicit, rational reason to keep favouring whoever it already trusts
+    and to keep avoiding whoever it's barely spoken to (doubly so once that
+    edge's trust has decayed negative) — nothing in the prompt ever pushed
+    back the other way. One real world ended up with a single hub bonded to
+    everyone while the other agents almost never contacted each other
+    directly. This doesn't override the trust framing, it just puts a
+    thumb on the scale toward the agent being left out.
+    """
+    if not visible_agents:
+        return ""
+
+    known_counts = [relationships[a].contact_count for a in visible_agents if a in relationships]
+    least_contacted_count = (
+        min(known_counts) if len(known_counts) >= 2 and max(known_counts) > min(known_counts) else None
+    )
+
+    def _line(agent_id: uuid.UUID) -> str:
+        edge = relationships.get(agent_id)
+        if edge is None:
+            return f"{agent_id} (no relationship history yet)"
+        base = f"{agent_id} ({edge.bond_state.value}, trust {edge.trust:.2f})"
+        # About/spec.md §6.5's Close bond formation needs a `give` action on
+        # top of already-high trust (`social/state_machine.py`'s
+        # `is_costly_loyalty_act`) — mentioned explicitly because it's easy
+        # to miss it's even possible from the bond_state/trust numbers alone
+        # (About/plan.md's M4 real trial: several relationships sat at
+        # trust=1.0 "friend" for 2,000+ ticks without this ever being tried).
+        close_bond_ready = (
+            edge.bond_state == BondState.FRIEND
+            and edge.trust >= settings.relationships.close_bond_trust_threshold
+        )
+        if close_bond_ready:
+            base += " — a meaningful gesture like 'give' could deepen this into a close bond"
+        elif least_contacted_count is not None and edge.contact_count == least_contacted_count:
+            base += " — you interact with them far less than the others here; reaching out could be worth it"
+        return base
+
+    lines = [_line(agent_id) for agent_id in visible_agents]
+    return f" Your relationships with visible agents: {'; '.join(lines)}."
+
+
+def _recent_memory_summary(retrieved: list[MemoryRecord]) -> str:
+    """Surfaces what `RetrievalService` actually retrieved (About/spec.md
+    §5.2's recency+importance+relevance top-k) as narrative content the
+    model can react to. Before this, `retrieved` was fetched every tick and
+    then only ever used for `_shareable_beliefs_summary`'s narrow filter and
+    `DecisionTrace` logging — its actual `.content` (what really happened:
+    "Another agent did 'betray' to me at tick 10") never reached the
+    prompt at all. About/plan.md's M4 real-run finding: with nothing to
+    react to beyond a tick number and a list of opaque agent UUIDs, a real
+    model reliably defaulted to generic greet/idle/sleep for an entire
+    simulated week, across all five real personas — raising reasoning
+    effort didn't change that (a real re-test), because the problem was
+    never how much the model thought, it was that there was nothing to
+    think *about*.
+    """
+    if not retrieved:
+        return ""
+    lines = "; ".join(f"(tick {m.tick}) {m.content}" for m in retrieved)
+    return f" What you remember: {lines}."
+
+
 def _shareable_beliefs_summary(retrieved: list[MemoryRecord], agent_id: uuid.UUID) -> str:
     """About/spec.md §8.1: only beliefs about someone else, strong enough to
     be worth propagating, are gossip-eligible — surfaced from whatever
@@ -123,10 +201,16 @@ class DecisionEngine:
         tier: Literal[1, 2],
         constraint_note: str | None = None,
         unmet_agent_ids: list[uuid.UUID] | None = None,
+        relationships: dict[uuid.UUID, RelationshipEdge] | None = None,
     ) -> tuple[ProposedAction, DecisionTrace]:
         summary = _observation_summary(observation, tick)
-        user_content = summary + " " + _goal_stack_summary(agent) + _shareable_beliefs_summary(
-            retrieved, agent.id
+        user_content = (
+            summary
+            + " "
+            + _goal_stack_summary(agent)
+            + _relationship_context_summary(observation.visible_agents, relationships or {})
+            + _recent_memory_summary(retrieved)
+            + _shareable_beliefs_summary(retrieved, agent.id)
         )
         if unmet_agent_ids:
             ids = ", ".join(str(a) for a in unmet_agent_ids)
