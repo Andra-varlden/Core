@@ -14,3 +14,10 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# Editor / assistant tool state (personal, machine-local, not project config)
+.claude/
+.kilo/
+.vscode/
+.idea/
+*.swp
