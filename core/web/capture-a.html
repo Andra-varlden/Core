@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Otherworld — Quick questionnaire</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <nav><a href="/onboarding.html">&larr; Back</a></nav>
+  <h1>Quick questionnaire</h1>
+  <p class="hint">
+    About 30 short questions, ~8 minutes. Pick whichever answer is closest to what you'd actually do,
+    not what sounds best.
+  </p>
+
+  <div class="card" id="app">Loading…</div>
+  <p id="error" class="error" style="display:none;"></p>
+
+  <script src="/api.js"></script>
+  <script>
+    let choiceItems = [];
+    let freeTextItems = [];
+    let boundaryOptions = [];
+    const answers = {};
+    const freeText = {};
+    let index = 0; // over choiceItems, then freeTextItems
+
+    function total() {
+      return choiceItems.length + freeTextItems.length;
+    }
+
+    function renderChoice(item) {
+      const app = document.getElementById("app");
+      const selected = answers[item.id];
+      app.innerHTML = `
+        <div class="progress">Question ${index + 1} of ${total()}</div>
+        <label>${item.prompt}</label>
+        <div class="options">
+          ${Object.entries(item.options).map(([letter, label]) => `
+            <label class="option">
+              <input type="radio" name="choice" value="${letter}" ${selected === letter ? "checked" : ""}>
+              <span>${label}</span>
+            </label>
+          `).join("")}
+        </div>
+        <button id="next" disabled>Next</button>
+      `;
+      app.querySelectorAll('input[name="choice"]').forEach((el) => {
+        el.addEventListener("change", () => { document.getElementById("next").disabled = false; });
+      });
+      if (selected) document.getElementById("next").disabled = false;
+      document.getElementById("next").addEventListener("click", () => {
+        const picked = app.querySelector('input[name="choice"]:checked');
+        answers[item.id] = picked.value;
+        advance();
+      });
+    }
+
+    function renderFreeText(item) {
+      const app = document.getElementById("app");
+      const existing = freeText[item.id] || "";
+      app.innerHTML = `
+        <div class="progress">Question ${index + 1} of ${total()}</div>
+        <label for="answer">${item.prompt}</label>
+        <textarea id="answer" placeholder="Type your answer here...">${existing}</textarea>
+        <button id="next">Next</button>
+      `;
+      document.getElementById("next").addEventListener("click", () => {
+        freeText[item.id] = document.getElementById("answer").value.trim();
+        advance();
+      });
+    }
+
+    function renderCurrent() {
+      if (index < choiceItems.length) {
+        renderChoice(choiceItems[index]);
+      } else {
+        renderFreeText(freeTextItems[index - choiceItems.length]);
+      }
+    }
+
+    function advance() {
+      index += 1;
+      if (index < total()) {
+        renderCurrent();
+      } else {
+        renderBoundaries();
+      }
+    }
+
+    function renderBoundaries() {
+      const app = document.getElementById("app");
+      app.innerHTML = `
+        <h2>One more thing</h2>
+        <p>These are things your agent will never do, no matter what happens in the world.
+           You can change them at any time.</p>
+        <div class="options">
+          ${boundaryOptions.map((opt) => `
+            <label class="option">
+              <input type="checkbox" name="boundary" value="${opt.key}">
+              <span>Block: ${opt.description}</span>
+            </label>
+          `).join("")}
+        </div>
+        <button id="submit">Finish</button>
+      `;
+      document.getElementById("submit").addEventListener("click", submit);
+    }
+
+    async function submit() {
+      const errorEl = document.getElementById("error");
+      errorEl.style.display = "none";
+      const enabled = Array.from(document.querySelectorAll('input[name="boundary"]:checked')).map((el) => el.value);
+      try {
+        await api("POST", "/api/v1/persona/method-a", { answers, free_text: freeText, enabled_boundaries: enabled });
+        document.getElementById("app").innerHTML = `
+          <h2>All done</h2>
+          <p>Thanks — that's everything. Your agent is being shaped from what you just told us.</p>
+          <a href="/onboarding.html"><button>Continue</button></a>
+        `;
+      } catch (err) {
+        showError(errorEl, err);
+      }
+    }
+
+    (async () => {
+      const errorEl = document.getElementById("error");
+      try {
+        const data = await api("GET", "/api/v1/persona/method-a/items");
+        choiceItems = data.choice_items;
+        freeTextItems = data.free_text_items;
+        boundaryOptions = data.boundary_options;
+        renderCurrent();
+      } catch (err) {
+        document.getElementById("app").style.display = "none";
+        showError(errorEl, err);
+      }
+    })();
+  </script>
+</body>
+</html>

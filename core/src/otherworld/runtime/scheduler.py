@@ -28,6 +28,7 @@ from otherworld.models.agent import Agent
 from otherworld.models.events import EventRecord, Rejection, ValidatedAction
 from otherworld.models.memory import MemoryRecord
 from otherworld.models.relationship import BondState, RelationshipEdge
+from otherworld.models.trace import decision_trace_to_orm
 from otherworld.persona.compiler import AgentBundle
 from otherworld.runtime.clock import tick_to_datetime
 from otherworld.runtime.compression import compress_if_over_cap
@@ -124,6 +125,7 @@ class TickScheduler:
             "accepted" if not isinstance(result, Rejection) else f"rejected:{result.failed_filter}"
         )
         self.trace_log.record(trace)
+        self.session.add(decision_trace_to_orm(trace))
         return result
 
     async def run_tick(self, tick: int) -> EventRecord:
@@ -368,6 +370,7 @@ class MultiAgentTickScheduler:
             "accepted" if not isinstance(result, Rejection) else f"rejected:{result.failed_filter}"
         )
         self.trace_log.record(trace)
+        self.session.add(decision_trace_to_orm(trace))
         return result
 
     async def _decide_for_agent(

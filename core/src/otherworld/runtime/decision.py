@@ -28,6 +28,25 @@ from otherworld.runtime.trace import DecisionTrace
 from otherworld.safety.registry import ActionRegistry, UnknownActionError
 
 
+# About/spec.md §15.3's own rate table is stale as of this session — it
+# still lists Tier 1 as `openai/gpt-oss-20b` at $0.075/$0.30 per 1M input/
+# output tokens, but `llm/providers/groq.py`'s TIER1_MODEL was moved to
+# `openai/gpt-oss-120b` (found live: only the 120b model produces
+# behaviourally varied, persona-driven choices — the 20b model reliably
+# defaults to generic greet/idle regardless of prompt richness). Both
+# tiers now cost the same: $0.15/$0.60 per 1M input/output tokens (sourced
+# 2026-09-19, cross-checked against multiple pricing trackers). Update this
+# alongside spec.md §15.3 if either model or its rate changes again.
+_INPUT_USD_PER_MILLION_TOKENS = 0.15
+_OUTPUT_USD_PER_MILLION_TOKENS = 0.60
+
+
+def estimate_cost_usd(input_tokens: int, output_tokens: int) -> float:
+    return (
+        input_tokens * _INPUT_USD_PER_MILLION_TOKENS + output_tokens * _OUTPUT_USD_PER_MILLION_TOKENS
+    ) / 1_000_000
+
+
 def _response_instruction() -> str:
     # A real model given only "<registered action name>" will happily
     # invent a plausible-sounding action that doesn't exist (observed live:
@@ -250,7 +269,7 @@ class DecisionEngine:
             latency_ms=latency_ms,
             input_tokens=completion.input_tokens,
             output_tokens=completion.output_tokens,
-            estimated_cost_usd=0.0,  # populate once About/spec.md §15.3 rate table is filled
+            estimated_cost_usd=estimate_cost_usd(completion.input_tokens, completion.output_tokens),
             created_at=tick_to_datetime(tick),
         )
         return proposed, trace

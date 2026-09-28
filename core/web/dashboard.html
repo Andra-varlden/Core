@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Otherworld — Cost dashboard</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <nav><a href="/onboarding.html">&larr; Back</a></nav>
+  <h1>Cost dashboard</h1>
+  <p class="hint">M6 T6.7 — cost per agent-day and tier shares, read live from decision_traces.</p>
+
+  <div class="card" id="app">Loading…</div>
+  <p id="error" class="error" style="display:none;"></p>
+
+  <script src="/api.js"></script>
+  <script>
+    (async () => {
+      const app = document.getElementById("app");
+      const errorEl = document.getElementById("error");
+      try {
+        const data = await api("GET", "/api/v1/dashboard/cost");
+        const tierRows = Object.entries(data.tier_share)
+          .map(([tier, share]) => `<tr><td>Tier ${tier}</td><td>${(share * 100).toFixed(1)}%</td></tr>`)
+          .join("");
+        const agentRows = data.cost_per_agent_day
+          .map((r) => `<tr><td>${r.agent_id}</td><td>${r.day}</td><td>$${r.cost_usd.toFixed(4)}</td></tr>`)
+          .join("");
+        app.innerHTML = `
+          <h2>Total spend: $${data.total_cost_usd.toFixed(4)}</h2>
+          <h3>Tier share</h3>
+          <table><tbody>${tierRows || "<tr><td>No decisions recorded yet.</td></tr>"}</tbody></table>
+          <h3>Cost per agent-day</h3>
+          <table>
+            <thead><tr><th>Agent</th><th>Day</th><th>Cost (USD)</th></tr></thead>
+            <tbody>${agentRows || "<tr><td colspan=3>No decisions recorded yet.</td></tr>"}</tbody>
+          </table>
+        `;
+      } catch (err) {
+        app.style.display = "none";
+        showError(errorEl, err);
+      }
+    })();
+  </script>
+</body>
+</html>

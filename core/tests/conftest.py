@@ -5,7 +5,18 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from otherworld.config import settings
 from otherworld.db import Base
-from otherworld.models import agent, events, memory, output, owner, persona, relationship, world  # noqa: F401
+from otherworld.models import (  # noqa: F401
+    agent,
+    auth,
+    events,
+    memory,
+    output,
+    owner,
+    persona,
+    relationship,
+    trace,
+    world,
+)
 
 
 @pytest_asyncio.fixture

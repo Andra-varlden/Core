@@ -157,6 +157,25 @@ class Settings(BaseSettings):
     # LLM provider. See otherworld.llm.factory and About/spec.md §15.3.
     groq_api_key: str | None = None
 
+    # Auth (M6). `session_secret` signs session tokens (HMAC, see
+    # `otherworld.auth.tokens`) — a real, non-default value is required in
+    # any deployed environment, since anyone who knows it can forge a
+    # session for any owner. `resend_api_key` is unset in dev on purpose:
+    # `otherworld.auth.email` falls back to logging the magic link instead
+    # of sending it, so auth is fully testable without a Resend account.
+    session_secret: str = "dev-only-insecure-secret-change-in-production"
+    resend_api_key: str | None = None
+    # Where the `web` frontend is reachable, for building the magic-link
+    # verify URL. The frontend is served by this same app (`api.main`'s
+    # static mount), not a separate service, so this is just this app's own
+    # public URL — `localhost:8000` matches `uvicorn`'s own default port.
+    # `debug=True` (dev default) sends the session cookie without `Secure`,
+    # since local dev is plain http; a deployed environment must set
+    # `DEBUG=false` or the browser silently drops the cookie instead of ever
+    # sending it back.
+    app_base_url: str = "http://localhost:8000"
+    debug: bool = True
+
     world: WorldConfig = WorldConfig()
     memory: MemoryConfig = MemoryConfig()
     reflection: ReflectionConfig = ReflectionConfig()

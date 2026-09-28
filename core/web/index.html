@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Otherworld — Sign in</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <h1>Otherworld</h1>
+  <div class="card">
+    <p>Enter your email and we'll send you a sign-in link. No password needed.</p>
+    <form id="request-form">
+      <label for="email">Email</label>
+      <input type="email" id="email" required placeholder="you@example.com" />
+      <button type="submit">Send me a link</button>
+    </form>
+    <p id="sent" style="display:none;">
+      Check your email for a sign-in link. You can close this tab.
+    </p>
+    <p id="error" class="error" style="display:none;"></p>
+  </div>
+
+  <script src="/api.js"></script>
+  <script>
+    document.getElementById("request-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const email = document.getElementById("email").value.trim();
+      const errorEl = document.getElementById("error");
+      errorEl.style.display = "none";
+      try {
+        await api("POST", "/api/v1/auth/request-link", { email });
+        document.getElementById("request-form").style.display = "none";
+        document.getElementById("sent").style.display = "block";
+      } catch (err) {
+        showError(errorEl, err);
+      }
+    });
+  </script>
+</body>
+</html>

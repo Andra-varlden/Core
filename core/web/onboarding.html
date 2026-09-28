@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Otherworld — Get started</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <h1>Welcome</h1>
+  <div id="steps"></div>
+  <p id="error" class="error" style="display:none;"></p>
+
+  <script src="/api.js"></script>
+  <script>
+    function stepCard({ done, title, body, href, cta }) {
+      const card = document.createElement("div");
+      card.className = "card";
+      card.innerHTML = `
+        <h2>${done ? "✓ " : ""}${title}</h2>
+        <p>${body}</p>
+        ${done ? "" : `<a href="${href}"><button>${cta}</button></a>`}
+      `;
+      return card;
+    }
+
+    (async () => {
+      const errorEl = document.getElementById("error");
+      const stepsEl = document.getElementById("steps");
+      try {
+        const me = await api("GET", "/api/v1/owners/me");
+        const persona = await api("GET", "/api/v1/persona/me");
+
+        stepsEl.appendChild(stepCard({
+          done: me.consent_complete,
+          title: "Step 1 — Consent",
+          body: "A few quick questions about how your agent should be shown to others, and an acknowledgement before it can go live.",
+          href: "/consent.html",
+          cta: "Go to consent",
+        }));
+
+        stepsEl.appendChild(stepCard({
+          done: persona !== null,
+          title: "Step 2 — Tell us about yourself",
+          body: "A 15-20 minute conversation. This is what shapes how your agent actually behaves — there's no right answer, just be honest.",
+          href: "/capture-b.html",
+          cta: "Start the conversation",
+        }));
+        if (persona === null) {
+          const alt = document.createElement("p");
+          alt.className = "hint";
+          alt.innerHTML = 'In a hurry? There\'s also a <a href="/capture-a.html">shorter, ~8 minute questionnaire</a>.';
+          stepsEl.appendChild(alt);
+        }
+
+        if (me.consent_complete && persona !== null) {
+          const done = document.createElement("div");
+          done.className = "card";
+          done.innerHTML = "<h2>You're all set</h2><p>Your agent is ready. You can revisit either step above at any time to update it.</p>";
+          stepsEl.appendChild(done);
+        }
+      } catch (err) {
+        showError(errorEl, err);
+      }
+    })();
+  </script>
+</body>
+</html>

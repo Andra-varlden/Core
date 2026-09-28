@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Otherworld — Signing you in</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <h1>Otherworld</h1>
+  <div class="card">
+    <p id="status">Signing you in…</p>
+    <p id="error" class="error" style="display:none;"></p>
+  </div>
+
+  <script src="/api.js"></script>
+  <script>
+    (async () => {
+      const token = new URLSearchParams(window.location.search).get("token");
+      const statusEl = document.getElementById("status");
+      const errorEl = document.getElementById("error");
+      if (!token) {
+        statusEl.style.display = "none";
+        showError(errorEl, new Error("This link is missing its token."));
+        return;
+      }
+      try {
+        await fetch(`/api/v1/auth/verify?token=${encodeURIComponent(token)}`).then(async (r) => {
+          if (!r.ok) {
+            const body = await r.json().catch(() => ({}));
+            throw new Error(body.detail || "This link is invalid or has expired.");
+          }
+        });
+        window.location.href = "/onboarding.html";
+      } catch (err) {
+        statusEl.style.display = "none";
+        showError(errorEl, err);
+      }
+    })();
+  </script>
+</body>
+</html>

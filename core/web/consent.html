@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Otherworld — Consent</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <nav><a href="/onboarding.html">&larr; Back</a></nav>
+  <h1>Before your agent goes live</h1>
+  <div class="card">
+    <form id="consent-form">
+      <label>How should your agent be identified to others?</label>
+      <div class="options">
+        <label class="option"><input type="radio" name="identity_mode" value="pseudonymous" checked>
+          <span>Under a made-up name (recommended) — not your real name</span></label>
+        <label class="option"><input type="radio" name="identity_mode" value="anonymous">
+          <span>Fully anonymous — no name shown at all</span></label>
+        <label class="option"><input type="radio" name="identity_mode" value="real_name">
+          <span>My real name</span></label>
+      </div>
+
+      <label>Who can watch your agent while it's in the world?</label>
+      <div class="options">
+        <label class="option"><input type="radio" name="visibility_scope" value="private" checked>
+          <span>Only me</span></label>
+        <label class="option"><input type="radio" name="visibility_scope" value="friends">
+          <span>Me and people I invite</span></label>
+        <label class="option"><input type="radio" name="visibility_scope" value="public">
+          <span>Anyone</span></label>
+      </div>
+
+      <label class="option">
+        <input type="checkbox" name="third_party_consent_intent" id="third-party">
+        <span>Later, I may want to invite friends who also join so our agents can form a real relationship
+          (nothing happens automatically — both people always have to agree first).</span>
+      </label>
+
+      <label class="option">
+        <input type="checkbox" name="liability_acknowledged" id="liability" required>
+        <span>I understand this is a simulation: my agent will act on its own within the boundaries I set,
+          and I can change or delete everything at any time.</span>
+      </label>
+
+      <button type="submit">Continue</button>
+    </form>
+    <p id="error" class="error" style="display:none;"></p>
+  </div>
+
+  <script src="/api.js"></script>
+  <script>
+    document.getElementById("consent-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const errorEl = document.getElementById("error");
+      errorEl.style.display = "none";
+      const form = e.target;
+      const identityMode = form.identity_mode.value;
+      const visibilityScope = form.visibility_scope.value;
+      if (!document.getElementById("liability").checked) {
+        showError(errorEl, new Error("Please check the last box to continue — it can't be skipped."));
+        return;
+      }
+      try {
+        await api("PUT", "/api/v1/owners/me/consent", {
+          identity_mode: identityMode,
+          visibility_scope: visibilityScope,
+          third_party_consent_intent: document.getElementById("third-party").checked,
+          liability_acknowledged: true,
+        });
+        window.location.href = "/onboarding.html";
+      } catch (err) {
+        showError(errorEl, err);
+      }
+    });
+  </script>
+</body>
+</html>

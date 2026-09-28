@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Otherworld — Tell us about yourself</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <nav><a href="/onboarding.html">&larr; Back</a></nav>
+  <h1>Tell us about yourself</h1>
+  <p class="hint">
+    Answer in your own words — there's no right answer, and you can leave one blank if nothing comes to
+    mind. This is what actually shapes how your agent behaves, so be honest rather than flattering.
+  </p>
+
+  <div class="card" id="app">Loading…</div>
+  <p id="error" class="error" style="display:none;"></p>
+
+  <script src="/api.js"></script>
+  <script>
+    let prompts = [];
+    let boundaryOptions = [];
+    const answers = {};
+    let index = 0;
+    let phase = "questions"; // "questions" -> "boundaries" -> "done"
+
+    function renderQuestion() {
+      const app = document.getElementById("app");
+      const p = prompts[index];
+      const existing = answers[p.id] || "";
+      app.innerHTML = `
+        <div class="progress">Question ${index + 1} of ${prompts.length}</div>
+        <label for="answer">${p.prompt}</label>
+        <textarea id="answer" placeholder="Type your answer here...">${existing}</textarea>
+        <button id="next">${index === prompts.length - 1 ? "Continue" : "Next"}</button>
+        <button type="button" id="skip" class="secondary">Skip this one</button>
+      `;
+      document.getElementById("next").addEventListener("click", () => {
+        answers[p.id] = document.getElementById("answer").value.trim();
+        advance();
+      });
+      document.getElementById("skip").addEventListener("click", () => {
+        delete answers[p.id];
+        advance();
+      });
+    }
+
+    function advance() {
+      index += 1;
+      if (index < prompts.length) {
+        renderQuestion();
+      } else {
+        phase = "boundaries";
+        renderBoundaries();
+      }
+    }
+
+    function renderBoundaries() {
+      const app = document.getElementById("app");
+      app.innerHTML = `
+        <h2>One more thing</h2>
+        <p>These are things your agent will never do, no matter what happens in the world.
+           You can change them at any time.</p>
+        <div class="options">
+          ${boundaryOptions.map((opt) => `
+            <label class="option">
+              <input type="checkbox" name="boundary" value="${opt.key}">
+              <span>Block: ${opt.description}</span>
+            </label>
+          `).join("")}
+        </div>
+        <button id="submit">Finish</button>
+      `;
+      document.getElementById("submit").addEventListener("click", submit);
+    }
+
+    async function submit() {
+      const errorEl = document.getElementById("error");
+      errorEl.style.display = "none";
+      const enabled = Array.from(document.querySelectorAll('input[name="boundary"]:checked')).map((el) => el.value);
+      try {
+        await api("POST", "/api/v1/persona/method-b", { answers, enabled_boundaries: enabled });
+        document.getElementById("app").innerHTML = `
+          <h2>All done</h2>
+          <p>Thanks — that's everything. Your agent is being shaped from what you just told us.</p>
+          <a href="/onboarding.html"><button>Continue</button></a>
+        `;
+      } catch (err) {
+        showError(errorEl, err);
+      }
+    }
+
+    (async () => {
+      const errorEl = document.getElementById("error");
+      try {
+        const data = await api("GET", "/api/v1/persona/method-b/prompts");
+        prompts = data.prompts;
+        boundaryOptions = data.boundary_options;
+        renderQuestion();
+      } catch (err) {
+        document.getElementById("app").style.display = "none";
+        showError(errorEl, err);
+      }
+    })();
+  </script>
+</body>
+</html>
