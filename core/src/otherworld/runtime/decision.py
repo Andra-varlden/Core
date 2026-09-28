@@ -27,7 +27,6 @@ from otherworld.runtime.perception import Observation
 from otherworld.runtime.trace import DecisionTrace
 from otherworld.safety.registry import ActionRegistry, UnknownActionError
 
-
 # About/spec.md §15.3's own rate table is stale as of this session — it
 # still lists Tier 1 as `openai/gpt-oss-20b` at $0.075/$0.30 per 1M input/
 # output tokens, but `llm/providers/groq.py`'s TIER1_MODEL was moved to

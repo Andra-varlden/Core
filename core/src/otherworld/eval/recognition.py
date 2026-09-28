@@ -229,7 +229,11 @@ def describe_event(event: EventRecordORM, elapsed_ticks: int | None = None) -> s
     # adding real free text to EventRecord.
     known = _ACTION_DESCRIPTIONS.get(event.action)
     if known is not None:
-        return known + _relationship_clause(event.action, event.relationship_deltas) + _timing_clause(elapsed_ticks)
+        return (
+            known
+            + _relationship_clause(event.action, event.relationship_deltas)
+            + _timing_clause(elapsed_ticks)
+        )
     fallback = f"Did '{event.action}'"
     redacted = redact_names(fallback)
     return redacted if REDACTION_TOKEN in redacted else fallback
@@ -264,7 +268,9 @@ def compute_distinctiveness(
 def _distinctive_action_types(
     distinctiveness: dict[str, float], top_n: int = _DISTINCTIVE_ACTION_TYPES
 ) -> list[str]:
-    ranked = sorted((a for a, score in distinctiveness.items() if score > 0), key=lambda a: -distinctiveness[a])
+    ranked = sorted(
+        (a for a, score in distinctiveness.items() if score > 0), key=lambda a: -distinctiveness[a]
+    )
     return ranked[:top_n]
 
 

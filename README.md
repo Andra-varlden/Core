@@ -1,7 +1,11 @@
-# Otherworld
+# Andra-varlden
 
-> **Working codename.** `Otherworld` is a placeholder — replace globally when the
-> real name is decided. See `About/context.md` §2.
+> Formerly codenamed `Otherworld` throughout the docs and code. The name has
+> been decided; project-facing references (this README, repo naming) are
+> updated. The deeper rename — the `otherworld` Python package itself,
+> imported everywhere in `core/` — is deliberately deferred until it's
+> explicitly requested, to avoid a large mechanical change across a working,
+> tested codebase for no functional benefit. See `About/context.md` §2.
 
 A platform where a real person creates an autonomous AI agent encoding their own
 personality, speech and values, and releases it into a shared persistent 2D
@@ -18,11 +22,11 @@ to owners and spectators as an ongoing story.
 
 | | |
 |---|---|
-| **Phase** | Phase 1 — Fidelity proof |
-| **Milestone** | M4 — Recognition Metric, Gate 1 (M5 building in parallel, by deliberate choice — see below) |
-| **Status** | M0, M2, M3 COMPLETE. M1 and M4 both IN PROGRESS — the provider blocker is resolved (Groq configured, confirmed working live); the only remaining blocker for a real Gate 1 trial is recruiting the other 3-4 M1 subjects. **M5 is also IN PROGRESS**, ahead of Gate 1 passing — an explicit, acknowledged deviation from the plan's own phase ordering (`plan.md` §5, ADR-008's rationale), not an oversight. The real 20-agent/10,000-tick T5.1 run has now been attempted and completed — 5 real bugs found and fixed, 4 of 12 measurable acceptance criteria still fail (see `plan.md`'s M5 status for the full, honest results table and root causes). |
-| **Gate ahead** | Gate 1 — Recognition accuracy ≥ 70% (at M4) |
-| **Last updated** | 2026-09-17 |
+| **Phase** | Phase 2 — Closed multi-owner alpha |
+| **Milestone** | M6 — Hosting, accounts, persistence |
+| **Status** | **Gate 1 concluded WEAK** — a real 5-subject Recognition Metric trial landed at 56.4% mean accuracy, below the ≥70% pass bar. Per `spec.md` §14's own interpretation table, WEAK calls for building Method D and re-testing before proceeding; that re-test was attempted, didn't move the number, and a deliberate call was made to accept 56.4% and move on rather than keep spending real LLM-call budget on a metric that wasn't producing signal (a real quiz-design bug — several question types rendered byte-identical regardless of the real answer — was found and partially, not fully, addressed). Recorded here plainly rather than as a pass. **M6 is now built and tested end to end**: unattended deploy worker with crash recovery, magic-link auth with a *real* (not placeholder) consent gate, mutual social invitations (ADR-007), a deletion cascade with a zero-residue test (invariant I7), cost-trace persistence with a cost-per-agent-day/tier-share dashboard, and a `core/web/` capture UI (Method A + B) served same-origin from the API. **Not yet done:** T6.1/T6.2 (72-hour unattended run, kill-and-resume) can only be verified against a real deployment — blocked on creating Railway and Resend accounts, both steps only the project owner can take. |
+| **Gate ahead** | Gate 2 — closed multi-owner alpha (M9) |
+| **Last updated** | 2026-09-28 |
 
 > **This block is updated on every merged PR.** See [Update protocol](#-update-protocol).
 
@@ -59,11 +63,12 @@ test that.
 
 ## ▸ Repositories
 
-| Repo | Visibility | Contents |
-|---|---|---|
-| `docs` | Private | These four documents + ADRs *(this repo)* |
-| `core` | Private | The simulation — Python 3.12 + FastAPI |
-| `web` | Private | Capture UI, dashboard, tile renderer *(created at M6)* |
+Currently **one repo**: `About/` (these four documents) + `core/` (the
+simulation, including `core/web/` — the M6 capture UI and dashboard, served
+from the same app as the API, not a separate service). Pushed to GitHub as
+`Andra-varlden/Core`. Splitting `About/` and `core/` into separate repos was
+considered and explicitly deferred — revisit only once there's a real reason
+(e.g. a dedicated frontend contributor) to pay the overhead.
 
 Further splits (`world-engine`, `moderation`, `infra`) only once boundaries have
 stabilised. See `About/architecture.md` §15.
@@ -77,8 +82,8 @@ stabilised. See `About/architecture.md` §15.
 ```bash
 # prerequisites: Python 3.12, Docker, Docker Compose
 
-git clone git@github.com:ORG_NAME/core.git
-cd core
+git clone https://github.com/Andra-varlden/Core.git
+cd Core/core
 
 cp .env.example .env          # then fill in provider keys
 
@@ -158,12 +163,12 @@ These are the things that must never quietly erode.
 | ID | Milestone | Status |
 |---|---|---|
 | M0 | Foundations and schemas | COMPLETE |
-| M1 | Persona capture | IN PROGRESS |
+| M1 | Persona capture | COMPLETE (5 real subjects captured) |
 | M2 | Single agent, single tick | COMPLETE |
 | M3 | Two agents, first contact | COMPLETE |
-| M4 | **Recognition Metric — Gate 1** | IN PROGRESS |
+| M4 | **Recognition Metric — Gate 1** | CONCLUDED — WEAK (56.4%), accepted, proceeding |
 | M5 | Small world, full social system | IN PROGRESS |
-| M6 | Hosting, accounts, persistence | NOT STARTED |
+| M6 | Hosting, accounts, persistence | COMPLETE (code) — real-deployment verification (T6.1/T6.2) pending Railway |
 | M7 | Safety and moderation for real | NOT STARTED |
 | M8 | Owner dashboard (minimum) | NOT STARTED |
 | M9 | Closed alpha — **Gate 2** | NOT STARTED |
@@ -210,6 +215,9 @@ Newest first. Format: `YYYY-MM-DD · #PR · milestone · change`
 
 | Date | PR | Milestone | Change |
 |---|---|---|---|
+| 2026-09-28 | — | CI | Fixed the first real CI run's failures (ruff, 40 errors): configured `flake8-bugbear`'s `extend-immutable-calls` for `fastapi.Depends`/`Query`/`Path`/`Body` — FastAPI's dependency-injection pattern (`param: T = Depends(fn)`) is idiomatic, not a real B008 mutable-default risk, and every M6 route handler was tripping it; wrapped 12 lines over the 110-column limit; replaced two `assert False, "..."` test patterns with `raise AssertionError(...)` (B011). `ruff check .`, `mypy --strict` on `models/`+`safety/`, `alembic upgrade head`, and the full pytest suite are all clean locally, matching every CI step. |
+| 2026-09-28 | — | M4→M6 | **Gate 1 concluded.** Ran the real 5-subject Recognition Metric trial to completion. Final result: 56.4% mean accuracy — WEAK per `spec.md` §14. Built and ran Method D (scenario replay) as the spec's own prescribed WEAK-band remedy; it didn't move the number in a re-test. Root-caused (not fully fixed) a real quiz-design bug along the way: several action types (`form_goal`, `reflect`, `abandon_goal`) have no relationship-delta or elapsed-time data, so every instance of them renders as byte-identical text regardless of the real underlying event — no amount of distinctiveness-based sampling can make an indistinguishable description recognisable. A deliberate decision was made to accept 56.4% and move to Phase 2 rather than keep spending real LLM-call budget chasing a fix, given repeated trial rounds weren't producing better signal. Moved on to M6. |
+| 2026-09-28 | — | M6 | **All six M6 stages built and tested** (stages run back-to-back per an explicit "build through all of it, only stop if something needs me" instruction): (1) deploy skeleton — single Dockerfile, two Railway service roles, `/health`, a real-time-paced unattended `worker.py` with crash recovery (resumes from `max(tick)`, not a checkpoint file); (2) magic-link auth (HMAC session tokens, Resend with a dev-mode log fallback) and a real consent gate — found and fixed a genuine gap here: real (non-placeholder) owners started with `consent=None` but no endpoint ever existed to complete it, which would have permanently blocked agent creation for every real signup; `require_consent` also only checked "a record exists," not `liability_acknowledged`'s actual value, despite `architecture.md` §2 explicitly requiring the latter — both fixed; (3) mutual social invitations enforcing ADR-007 (no unilateral seeding); (4) an owner deletion cascade with a receipt and a zero-residue test (invariant I7) — hard-deletes the owner's own data, anonymises (strips the reference, keeps the record) other owners' data that merely references them; (5) decision-trace persistence (`decision_traces` table) with real cost-per-agent-day/tier-share aggregation queries, replacing an always-zero `estimated_cost_usd`; (6) a `core/web/` capture UI (Method A + B, plain HTML/CSS/JS, no build step) and a minimal text cost dashboard, mounted as static files from the same FastAPI app as the API specifically to avoid CORS and cross-origin cookie handling. 300+ tests pass; ruff and mypy clean. |
 | 2026-09-17 | — | M5 | Attempted and completed T5.1: a real 20-agent, 10,000-tick run (`otherworld.cli.acceptance_run`) against real Postgres, real wall-clock time (~3.5 hours once stable). The first attempt stalled completely within ~100 ticks; getting a run that actually finishes surfaced and fixed 5 real bugs invisible at every earlier test's ≤2-agent, ≤500-tick scale: an unbounded-scan-plus-Python-cosine-loop in `runtime/retrieval.py` (O(ticks²), fixed with bounded indexed queries + pgvector-side scoring); a compression-protection bug in `runtime/compression.py` that let a busy conflicted edge shield its entire (unbounded) shared history from ever being compressed; an unindexed cross-agent table scan in `social/gossip.py`'s pile-on check (fixed with a GIN index); `social/conflict.py`'s `open_conflict` letting Feud/Broken edges accumulate conflict records forever (only Strained was guarded); and the run script itself leaking process memory by holding one SQLAlchemy session for the whole run with `expire_on_commit=False` (fixed with periodic `session.expunge_all()` — this is what got the first full-scale attempt killed by the OS for low memory). Also retuned Postgres autovacuum/fillfactor after `relationship_edges` (a ~100-row table, rewritten on nearly every interaction) MVCC-bloated to 19-26MB. **Results: T5.1, T5.8, T5.9 pass; T5.3/T5.4 pass only vacuously; T5.6, T5.7, T5.13 fail** — full honest breakdown and root causes in `plan.md`'s M5 status. The real finding: under a conflict-heavy action mix, Feud has no reconciliation path and the Strained-timeout-to-Broken transition is never invoked by the live tick loop, so the whole population eventually saturates into permanent Feud — `social/maintenance.py` (never built) and a Feud recovery path are the concrete next steps. |
 | 2026-09-16 | — | M5 | Finished wiring gossip and faction detection end-to-end (previously landed as tested-but-unwired mechanics, see the M5 entry below). `MemoryRecord` gained `hop_count`/`valence` fields (new migration) so gossip lineage and pile-on damping are real, not bookkeeping the caller has to get right: `runtime/decision.py` now surfaces an agent's own gossip-eligible beliefs with their ids, the model picks one plus a listener via `confide`, and `runtime/resolver.py` runs the full pipeline — hop limit and pile-on damping checked against the database before the listener's new, distorted belief is written. Reflection (`runtime/reflection.py`) now asks for `about_agent_id` and `valence` per belief instead of a flat string, using each source memory's `subjects` (not its anonymised content) so a belief can actually be about a specific third party — required for gossip to have anything real to propagate. Faction detection (`social/factions.py`) now runs as a genuine periodic scan inside `MultiAgentTickScheduler`, with cross-scan persistence tracking for the exclusion signal's 1,000-tick requirement. 175/175 tests pass, ruff and mypy clean. |
 | 2026-09-16 | — | M5 | Started M5 (deliberately ahead of Gate 1 — see Current status). Built and tested against a real Postgres, not mocks: the full conflict system (`social/conflict.py`, all five triggers, scar effect, cooling periods, repair-probability roll, all three terminal transitions) wired into `runtime/resolver.py`; the extended bond state machine (Close bond, decay demotion, Broken→Acquaintance reconciliation); reflection and belief formation (`runtime/reflection.py`); memory compression with conflict-linked protection (`runtime/compression.py`); the goal stack and goal-coupling adoption (`runtime/goals.py`); the minimal tile world — grid, A* pathfinding, Chebyshev proximity, five starter zones, no renderer (`world/map.py`, `world/pathfinding.py`, `world/proximity.py`) — with perception now genuinely proximity-gated instead of M2/M3's "everyone is visible" stand-in; exogenous event scheduling (`world/exogenous.py`). Gossip propagation and faction detection (`social/gossip.py`, `social/factions.py`) have their core mechanics built and unit-tested against `spec.md`'s formulas but aren't autonomously wired into the tick loop yet — documented as open gaps in each module and in `plan.md`'s M5 status. Two real pre-existing bugs found and fixed along the way: `take` was miscategorised so it never went through the relationship-consequence path at all (RESOURCE_COMPETITION could never fire), and the dev database's schema had drifted from the models since M2 with no Alembic migration ever recorded for it — a new migration brings it current. 169/169 tests pass, ruff and mypy clean. The full 20-agent/10,000-tick acceptance run (T5.1-T5.5, T5.13-T5.15) has not been attempted — scoped as its own deliberate step, not something to run inline. |
@@ -224,30 +232,39 @@ Newest first. Format: `YYYY-MM-DD · #PR · milestone · change`
 
 ## ▸ Open items
 
-**Blocking Gate 1 right now:**
+**Gate 1 (M4) — closed:**
 - [x] ~~Configure a real Tier 1/2 LLM provider key.~~ **Done 2026-09-16** —
       Groq (`otherworld.llm.providers.groq`), confirmed working end to end
-      via live pilot runs. Real persona-driven behavioural variance
-      observed. See `About/context.md` §11 for the full story, including two
-      real bugs the live testing surfaced and fixed (action hallucination,
-      relationship-state-change importance scoring).
-- [ ] **Recruit the other 3-4 M4 Recognition Metric subjects** — they are
-      also the M1 persona capture subjects. Now the sole remaining blocker:
-      2 agents can only ever produce ~2-3 high-importance events total
-      (once per relationship pair), far short of the 10-per-agent §14 needs.
-      4-5 agents means 4-5+ pairwise relationships, each contributing its
-      own eligible events.
-- [ ] Once recruited, run `otherworld.cli.run_world` for all of them
-      together, for something closer to spec.md's "simulated week" than the
-      handful of pilot ticks tested so far, before attempting a real trial
-      with `otherworld.cli.recognition`.
+      via live pilot runs.
+- [x] ~~Recruit the M4 Recognition Metric subjects and run the real trial.~~
+      **Done 2026-09-28** — 5 subjects, concluded WEAK at 56.4%, accepted and
+      proceeding rather than re-testing further. See the Changelog.
 
-**Not yet blocking, but needed before Phase 2:**
-- [ ] Decide the real product name; replace the `Otherworld` placeholder globally.
-- [ ] Decide the GitHub organisation name; replace `ORG_NAME` globally.
-- [ ] Create `docs` and `core` repos, private, with branch protection on `main`.
-- [ ] Populate the rate table in `About/spec.md` §15.3 from current provider pricing.
+**Blocking real M6 deployment verification (T6.1/T6.2) right now:**
+- [ ] **Create a Railway account**, connect this repo, set the env vars in
+      `core/README.deploy.md`. Human-only step.
+- [ ] **Create a Resend account** for real magic-link email delivery.
+      Optional — dev-mode logs the link instead, which is fine for internal
+      testing but not for real users.
+
+**Not yet blocking, but open:**
+- [x] ~~Decide the real product name.~~ **Decided 2026-09-28: Andra-varlden.**
+      Project-facing references (this README, the GitHub org/repo) are
+      updated. Root folder rename to `Andra-varlden` is pending a session
+      restart (the running session holds a lock on its own working
+      directory). The deeper rename — the `otherworld` Python package name
+      itself — is deliberately deferred until explicitly requested.
+- [x] ~~Decide the GitHub organisation name.~~ **Decided: `Andra-varlden`.**
+      Pushed as `Andra-varlden/Core` (single repo — see Repositories above).
+- [ ] Branch protection on `main`.
+- [ ] Populate the rate table in `About/spec.md` §15.3 from current provider
+      pricing — `runtime/decision.py`'s own cost estimate already uses the
+      real current rate ($0.15/$0.60 per M input/output tokens); the spec
+      doc's table is what's still stale.
 - [ ] Trademark and domain check on the chosen name.
+- [ ] M5's known-failing acceptance criteria (T5.6, T5.7, T5.13 — Feud has no
+      reconciliation path) haven't been revisited since the 2026-09-17 entry
+      below; M6 was built on top of M5 as-is.
 
 ---
 

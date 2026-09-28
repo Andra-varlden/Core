@@ -52,7 +52,9 @@ async def accept(
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, str]:
     try:
-        await accept_seeded_relationship(session, accepter_owner_id=owner.id, proposer_owner_id=body.proposer_owner_id)
+        await accept_seeded_relationship(
+            session, accepter_owner_id=owner.id, proposer_owner_id=body.proposer_owner_id
+        )
     except (NoPersonaError, NoPendingInvitationError) as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     await session.commit()

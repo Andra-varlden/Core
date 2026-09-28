@@ -25,7 +25,8 @@ async def test_api_routes_are_not_shadowed_by_the_static_mount(db_session):
 
     app.dependency_overrides[get_session] = _override_get_session
     try:
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.post("/api/v1/auth/request-link", json={"email": "shadow@example.com"})
             assert response.status_code == 202  # not a 404 from the static mount swallowing the path
     finally:

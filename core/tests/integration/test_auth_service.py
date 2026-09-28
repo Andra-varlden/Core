@@ -84,7 +84,7 @@ def test_require_consent_blocks_an_owner_with_no_consent_record():
     )
     try:
         require_consent(owner)
-        assert False, "should have raised"
+        raise AssertionError("should have raised")
     except ConsentRequiredError:
         pass
 

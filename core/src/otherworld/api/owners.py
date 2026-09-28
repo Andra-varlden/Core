@@ -61,4 +61,8 @@ async def delete_me(
     receipt = await delete_owner(session, owner.id)
     await session.commit()
     response.delete_cookie(SESSION_COOKIE_NAME)
-    return {"receipt": {k: (str(v) if k in ("owner_id", "deleted_at") else v) for k, v in asdict(receipt).items()}}
+    return {
+        "receipt": {
+            k: (str(v) if k in ("owner_id", "deleted_at") else v) for k, v in asdict(receipt).items()
+        }
+    }

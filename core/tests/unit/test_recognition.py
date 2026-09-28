@@ -227,9 +227,13 @@ async def test_two_otherwise_identical_transition_events_get_different_descripti
     fast_actor, fast_target = uuid.uuid4(), uuid.uuid4()
     slow_actor, slow_target = uuid.uuid4(), uuid.uuid4()
 
-    fast_edge, _ = await get_or_create_edge(db_session, world_id, fast_actor, fast_target, uuid.uuid4(), tick=100)
+    fast_edge, _ = await get_or_create_edge(
+        db_session, world_id, fast_actor, fast_target, uuid.uuid4(), tick=100
+    )
     await save_edge(db_session, fast_edge)
-    slow_edge, _ = await get_or_create_edge(db_session, world_id, slow_actor, slow_target, uuid.uuid4(), tick=0)
+    slow_edge, _ = await get_or_create_edge(
+        db_session, world_id, slow_actor, slow_target, uuid.uuid4(), tick=0
+    )
     await save_edge(db_session, slow_edge)
 
     deltas = [{"bond_state_before": "friend", "bond_state_after": "close_bond"}]
@@ -246,7 +250,9 @@ async def test_two_otherwise_identical_transition_events_get_different_descripti
     slow_description = describe_event(slow_event, slow_elapsed)
 
     assert fast_description != slow_description
-    assert fast_description == "Gave an item to another agent, which formed a close bond, about 2 hours after meeting them"
+    assert fast_description == (
+        "Gave an item to another agent, which formed a close bond, about 2 hours after meeting them"
+    )
     assert "month" in slow_description
 
 

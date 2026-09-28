@@ -86,7 +86,9 @@ async def _run_one_world_tick(session, provider, world_row) -> int:
     agents, bundles = loaded
 
     last_event_tick = (
-        await session.execute(select(func.max(EventRecordORM.tick)).where(EventRecordORM.world_id == world.id))
+        await session.execute(
+            select(func.max(EventRecordORM.tick)).where(EventRecordORM.world_id == world.id)
+        )
     ).scalar_one_or_none()
     tick = (last_event_tick + 1) if last_event_tick is not None else 0
 

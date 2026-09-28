@@ -15,8 +15,8 @@ import pytest
 
 from otherworld.llm.providers.mock import MockLLMProvider
 from otherworld.models.agent import Position
-from otherworld.social.engine import get_edge, get_or_create_edge, save_edge
 from otherworld.runtime.resolver import Resolver
+from otherworld.social.engine import get_edge, get_or_create_edge, save_edge
 
 NOW = datetime.now(UTC)
 ACTOR_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")

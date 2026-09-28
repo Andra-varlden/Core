@@ -14,8 +14,8 @@ already collect everything before scoring), and save.
 
 from __future__ import annotations
 
-from pydantic import BaseModel
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from otherworld.api.deps import get_current_owner
@@ -23,9 +23,8 @@ from otherworld.db import get_session
 from otherworld.models.owner import Owner
 from otherworld.models.persona import PersonaObject
 from otherworld.persona.boundaries import DEFAULT_BOUNDARY_TOGGLES
-from otherworld.persona.capture.interview import ALL_PROMPTS
+from otherworld.persona.capture.interview import ALL_PROMPTS, score_interview
 from otherworld.persona.capture.questionnaire import TRAIT_ITEMS, score_questionnaire
-from otherworld.persona.capture.interview import score_interview
 from otherworld.persona.service import (
     build_persona_from_interview,
     build_persona_from_questionnaire,
@@ -54,7 +53,9 @@ _FREE_TEXT_PROMPTS = {
 }
 
 _A21_OPTIONS = {"a": "dry", "b": "warm", "c": "absurd", "d": "sarcastic", "e": "not funny"}
-_A22_OPTIONS = {"a": "talk most", "b": "talk about equally", "c": "listen more", "d": "listen almost entirely"}
+_A22_OPTIONS = {
+    "a": "talk most", "b": "talk about equally", "c": "listen more", "d": "listen almost entirely"
+}
 _A23_OPTIONS = {"a": "constantly", "b": "when it fits", "c": "rarely", "d": "never"}
 _A24_OPTIONS = {"a": "long", "b": "a few sentences", "c": "one line", "d": "a word or two"}
 

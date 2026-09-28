@@ -31,7 +31,9 @@ async def request_link(body: RequestLinkBody, session: AsyncSession = Depends(ge
 
 
 @router.get("/verify")
-async def verify(token: str, response: Response, session: AsyncSession = Depends(get_session)) -> dict[str, str]:
+async def verify(
+    token: str, response: Response, session: AsyncSession = Depends(get_session)
+) -> dict[str, str]:
     owner = await verify_magic_link(session, token)
     if owner is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "this link is invalid or has expired")

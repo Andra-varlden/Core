@@ -174,7 +174,7 @@ async def test_declining_liability_acknowledgement_does_not_complete_the_gate(db
         refreshed = owner_from_orm(row)
         try:
             require_consent(refreshed)
-            assert False, "should have raised"
+            raise AssertionError("should have raised")
         except ConsentRequiredError:
             pass
     finally:

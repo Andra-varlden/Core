@@ -47,6 +47,14 @@ extend-exclude = ["alembic/versions"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+# FastAPI's dependency-injection pattern is `param: T = Depends(fn)` — the
+# call in the default is evaluated once by FastAPI's DI system, not on every
+# request, so B008 (function-call-in-default-argument)'s usual mutable-
+# default concern doesn't apply. Without this, ruff flags every route
+# handler in otherworld.api.* (M6).
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Path", "fastapi.Body"]
+
 [tool.mypy]
 python_version = "3.12"
 plugins = ["pydantic.mypy"]

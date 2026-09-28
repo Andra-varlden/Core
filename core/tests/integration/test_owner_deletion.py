@@ -7,13 +7,13 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 
+from otherworld.llm.providers.mock import MockLLMProvider
 from otherworld.models.agent import AgentORM, Position, agent_to_orm
 from otherworld.models.auth import MagicLinkTokenORM
 from otherworld.models.events import EventRecord, EventRecordORM, event_to_orm
 from otherworld.models.memory import MemoryKind, MemoryRecord, MemoryRecordORM, memory_to_orm
 from otherworld.models.output import RecognitionTrial, recognition_trial_to_orm
 from otherworld.models.owner import OwnerORM
-from otherworld.llm.providers.mock import MockLLMProvider
 from otherworld.models.persona import PersonaObject, PersonaObjectORM, TraitVector, VoiceProfile
 from otherworld.models.relationship import RelationshipEdgeORM
 from otherworld.owner.deletion import delete_owner

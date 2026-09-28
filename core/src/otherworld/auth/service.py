@@ -24,7 +24,9 @@ async def _get_or_create_owner_by_email(session: AsyncSession, email: str) -> Ow
     # change later, not the final identity — consent (still None here) is
     # what actually gates anything consequential (see owner.service.require_consent).
     handle = email.split("@")[0]
-    owner = Owner(id=uuid.uuid4(), handle=handle, email=email, consent=None, created_at=now, last_active_at=now)
+    owner = Owner(
+        id=uuid.uuid4(), handle=handle, email=email, consent=None, created_at=now, last_active_at=now
+    )
     session.add(owner_to_orm(owner))
     await session.flush()
     return owner
