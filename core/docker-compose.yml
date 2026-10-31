@@ -26,5 +26,42 @@ services:
       timeout: 5s
       retries: 10
 
+  # Local T6.1/T6.2 run: `docker compose --profile app up --build`. Profile keeps
+  # plain `docker compose up` (dev deps only) behaving as before.
+  migrate:
+    profiles: [app]
+    build: .
+    command: alembic upgrade head
+    env_file: .env
+    environment: &appenv
+      DATABASE_URL: postgresql+asyncpg://otherworld:otherworld@postgres:5432/otherworld
+      DATABASE_URL_SYNC: postgresql+psycopg://otherworld:otherworld@postgres:5432/otherworld
+      REDIS_URL: redis://redis:6379/0
+      APP_BASE_URL: http://localhost:8000
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+
+  web:
+    profiles: [app]
+    build: .
+    command: uvicorn otherworld.api.main:app --host 0.0.0.0 --port 8000
+    env_file: .env
+    environment: *appenv
+    ports:
+      - "8000:8000"
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+
+  worker:
+    profiles: [app]
+    build: .
+    command: python -m otherworld.worker
+    env_file: .env
+    environment: *appenv
+    restart: unless-stopped
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+
 volumes:
   otherworld_pg:

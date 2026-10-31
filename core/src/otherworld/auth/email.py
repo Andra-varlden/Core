@@ -26,7 +26,7 @@ _FROM_ADDRESS = "Otherworld <login@otherworld.example>"  # [TUNE] replace once a
 
 def send_magic_link(email: str, link_url: str) -> None:
     if not settings.resend_api_key:
-        logger.info("DEV MODE (no RESEND_API_KEY set) — magic link for %s: %s", email, link_url)
+        logger.warning("DEV MODE (no RESEND_API_KEY set) — magic link for %s: %s", email, link_url)
         return
 
     body = json.dumps(
