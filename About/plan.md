@@ -689,8 +689,8 @@ Everything here is a problem that only exists once strangers are involved.
 **Acceptance tests**
 | # | Test | Passes when |
 |---|---|---|
-| T6.1 | 72-hour unattended run | No manual intervention required |
-| T6.2 | Kill and restart mid-tick | Resumes from last committed tick; no duplicate events |
+| T6.1 | 72-hour unattended run | No manual intervention required — **PASSED 2026-11-05** (local docker compose, mock LLM provider): 73.7 h, 443/443 ticks, 0 failures, 0 restarts, flat memory |
+| T6.2 | Kill and restart mid-tick | Resumes from last committed tick; no duplicate events — **PASSED 2026-10-31** (local; SIGKILL at tick 6099's first LLM call, replayed whole, 5 events, no gaps/dupes) |
 | T6.3 | Consent gate | Agent creation refused when flags incomplete |
 | T6.4 | Unilateral seeding | Rejected — an edge is only seeded on mutual acceptance |
 | T6.5 | **Deletion cascade** | Owner deletion removes all their data; witness events anonymised, not deleted; automated test asserts zero residue (invariant I7) |

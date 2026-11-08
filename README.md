@@ -168,7 +168,7 @@ These are the things that must never quietly erode.
 | M3 | Two agents, first contact | COMPLETE |
 | M4 | **Recognition Metric — Gate 1** | CONCLUDED — WEAK (56.4%), accepted, proceeding |
 | M5 | Small world, full social system | IN PROGRESS |
-| M6 | Hosting, accounts, persistence | COMPLETE (code) — real-deployment verification (T6.1/T6.2) pending Railway |
+| M6 | Hosting, accounts, persistence | COMPLETE — T6.1/T6.2 passed locally (docker compose, mock LLM); a hosted-deployment check is still open |
 | M7 | Safety and moderation for real | NOT STARTED |
 | M8 | Owner dashboard (minimum) | NOT STARTED |
 | M9 | Closed alpha — **Gate 2** | NOT STARTED |
@@ -240,7 +240,7 @@ Newest first. Format: `YYYY-MM-DD · #PR · milestone · change`
       **Done 2026-09-28** — 5 subjects, concluded WEAK at 56.4%, accepted and
       proceeding rather than re-testing further. See the Changelog.
 
-**Blocking real M6 deployment verification (T6.1/T6.2) right now:**
+**T6.1/T6.2 passed locally 2026-10-31 / 2026-11-05** (docker compose, mock LLM provider; a real-Groq run failed on `APITimeoutError`s, so it was not used). Only a hosted check remains open:
 - [ ] **Create a Railway account**, connect this repo, set the env vars in
       `core/README.deploy.md`. Human-only step.
 - [ ] **Create a Resend account** for real magic-link email delivery.

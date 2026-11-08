@@ -58,7 +58,9 @@ services:
     build: .
     command: python -m otherworld.worker
     env_file: .env
-    environment: *appenv
+    environment:
+      <<: *appenv
+      GROQ_API_KEY: ""  # empty -> llm/factory.py picks MockLLMProvider: free, no network flakiness for T6.1
     restart: unless-stopped
     depends_on:
       migrate: {condition: service_completed_successfully}
