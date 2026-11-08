@@ -8,8 +8,15 @@ change it in the doc in the same PR (ADR-009).
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _with_driver(url: str, prefix: str) -> str:
+    for plain in ("postgresql://", "postgres://"):
+        if url.startswith(plain):
+            return prefix + url[len(plain) :]
+    return url
 
 
 class WorldConfig(BaseModel):
@@ -153,6 +160,18 @@ class Settings(BaseSettings):
     # pointing that at `database_url` would periodically wipe the dev DB.
     test_database_url: str = "postgresql+asyncpg://otherworld:otherworld@localhost:5432/otherworld_test"
     redis_url: str = "redis://localhost:6379/0"
+
+    # Hosts like Railway hand out a plain `postgresql://` URL; pick the driver
+    # here so DATABASE_URL / DATABASE_URL_SYNC can both just reference it.
+    @field_validator("database_url", "test_database_url", mode="after")
+    @classmethod
+    def _async_driver(cls, v: str) -> str:
+        return _with_driver(v, "postgresql+asyncpg://")
+
+    @field_validator("database_url_sync", mode="after")
+    @classmethod
+    def _sync_driver(cls, v: str) -> str:
+        return _with_driver(v, "postgresql+psycopg://")
 
     # LLM provider. See otherworld.llm.factory and About/spec.md §15.3.
     groq_api_key: str | None = None
